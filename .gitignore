@@ -18,11 +18,13 @@ release/
 .env.*
 !.env.example
 *.db
+!prisma/dev-seed.db
 *.db-journal
 *.sqlite
 *.sqlite3
 invoices_archive/
 auth_info_baileys/
+/prisma/whatsapp_auth_session/
 
 # Editor directories and files
 .vscode/*

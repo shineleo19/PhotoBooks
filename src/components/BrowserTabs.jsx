@@ -11,9 +11,10 @@ import {
   Boxes,
   FileText,
   PackageOpen,
-  Warehouse,
 } from 'lucide-react';
-import Warehouses from './Warehouse';
+
+const MIN_TAB_WIDTH = 120;
+const OVERFLOW_BUTTON_WIDTH = 48;
 
 export default function BrowserTabs({ tabs, activeTab, setActiveTab, closeTab }) {
   const containerRef = useRef(null);
@@ -29,17 +30,8 @@ export default function BrowserTabs({ tabs, activeTab, setActiveTab, closeTab })
       let nextVisibleCount = tabs.length;
 
       if (containerWidth && totalWidth > containerWidth) {
-        const overflowButtonWidth = 48;
-        let usedWidth = 0;
-        nextVisibleCount = 0;
-
-        for (const tabWidth of tabWidths) {
-          if (usedWidth + tabWidth + overflowButtonWidth > containerWidth) break;
-          usedWidth += tabWidth;
-          nextVisibleCount += 1;
-        }
-
-        nextVisibleCount = Math.max(nextVisibleCount, 1);
+        const availableTabWidth = Math.max(containerWidth - OVERFLOW_BUTTON_WIDTH, MIN_TAB_WIDTH);
+        nextVisibleCount = Math.max(1, Math.floor(availableTabWidth / MIN_TAB_WIDTH));
       }
 
       setVisibleCount((currentCount) => currentCount === nextVisibleCount ? currentCount : nextVisibleCount);
@@ -72,7 +64,7 @@ export default function BrowserTabs({ tabs, activeTab, setActiveTab, closeTab })
       case 'PendingActions':
         return <ClockAlert   size={17} />;
       default:
-        return <Warehouse size={17} />;
+        return <Boxes size={17} />;
     }
   };
 
@@ -92,13 +84,14 @@ export default function BrowserTabs({ tabs, activeTab, setActiveTab, closeTab })
         ))}
       </div>
       <div className="flex min-w-0 flex-1 items-center overflow-hidden">
-      {visibleTabs.map((tab, index) => {
+      {visibleTabs.map((tab) => {
         const isActive = activeTab === tab.id;
         return (
           <div
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`group h-full flex items-center gap-2.5 px-6 border-r border-gray-200 cursor-pointer text-[15px] whitespace-nowrap transition-colors relative ${
+            title={tab.name}
+            className={`group min-w-0 flex-1 h-full flex items-center gap-2.5 px-4 border-r border-gray-200 cursor-pointer text-[15px] whitespace-nowrap transition-colors relative ${
               isActive
                 ? 'text-[#2563eb] font-semibold bg-blue-50/10 border-b-[2.5px] border-b-[#2563eb]'
                 : 'text-gray-700 font-medium hover:bg-gray-50'
@@ -107,12 +100,12 @@ export default function BrowserTabs({ tabs, activeTab, setActiveTab, closeTab })
             <span className={isActive ? 'text-[#2563eb]' : 'text-gray-400'}>
               {getIcon(tab.id)}
             </span>
-            <span>{tab.name}</span>
+            <span className="min-w-0 flex-1 truncate">{tab.name}</span>
 
             {tab.id !== 'Dashboard' && (
               <button
                 onClick={(e) => closeTab(tab.id, e)}
-                className="ml-2 p-0.5 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-700 opacity-0 group-hover:opacity-100 transition-opacity"
+                className="ml-1 shrink-0 rounded p-0.5 text-gray-400 opacity-0 transition-opacity hover:bg-gray-200 hover:text-gray-700 group-hover:opacity-100"
               >
                 <X size={14} />
               </button>

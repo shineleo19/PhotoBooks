@@ -5,6 +5,42 @@
   box-sizing: border-box;
 }
 
+/* Keep every scrollable area compact and consistent with the sidebar. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+html.dark * {
+  scrollbar-color: #475569 transparent;
+}
+
+html.dark *::-webkit-scrollbar-thumb {
+  background: #475569;
+}
+
+html.dark *::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
 html, body, #root {
   width: 100%;
   min-height: 100vh;
@@ -38,7 +74,7 @@ html, body, #root {
     color: #e2e8f0 !important;
   }
 
-  /* Pastel Metric Cards (Warehouse & TodaySales) */
+  /* Pastel metric cards */
   html.dark .bg-\[\#effdf5\] {
     background-color: rgba(16, 185, 129, 0.1) !important;
     border-color: rgba(16, 185, 129, 0.25) !important;
@@ -97,5 +133,11 @@ html, body, #root {
   html.dark .hover\:bg-gray-100:hover,
   html.dark .hover\:bg-gray-100\/80:hover {
     background-color: #1e293b !important;
+  }
+}
+
+@media print {
+  @page {
+    margin: 0;
   }
 }

@@ -1,12 +1,10 @@
 // src/components/TopNav.jsx
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Search,
   Moon,
   Sun,
-  Sparkles,
   Bell,
-  Grid,
   AlertTriangle,
   TrendingUp,
   Receipt,
@@ -24,7 +22,10 @@ export default function TopNav({
   const [showNotifications, setShowNotifications] = useState(false);
   const notificationsRef = useRef(null);
 
-  const unreadCount = notifications.filter((n) => !n.read).length;
+  const unreadCount = useMemo(
+    () => notifications.reduce((count, notification) => count + (notification.read ? 0 : 1), 0),
+    [notifications]
+  );
 
   useEffect(() => {
     const handleOutsideClick = (event) => {
@@ -38,10 +39,7 @@ export default function TopNav({
   }, []);
 
   const handleOpenNotifications = () => {
-    setShowNotifications(true);
-    if (unreadCount > 0 && onMarkNotificationsRead) {
-      onMarkNotificationsRead();
-    }
+    setShowNotifications((current) => !current);
   };
 
   return (
@@ -85,14 +83,6 @@ export default function TopNav({
           {darkMode ? <Sun size={20} /> : <Moon size={20} />}
         </button>
 
-        <button
-          onClick={onOpenSearch}
-          className="hover:text-gray-800 transition-colors cursor-pointer"
-          title="Ask AI & Search"
-        >
-          <Sparkles size={20} />
-        </button>
-
         <div ref={notificationsRef}>
           {/* Notification Bell with Unread Red Dot */}
           <button
@@ -110,9 +100,13 @@ export default function TopNav({
             <div className="absolute top-12 right-28 w-88 bg-white border border-gray-200 shadow-xl rounded-2xl overflow-hidden z-50">
             <div className="px-4 py-3 bg-gray-50 border-b border-gray-100 text-sm font-semibold text-gray-800 flex justify-between items-center">
               <span>Live Business Alerts</span>
-              <span className="text-xs text-emerald-600 flex items-center gap-1 font-medium">
-                <Check size={14} /> All read
-              </span>
+              <button
+                type="button"
+                onClick={onMarkNotificationsRead}
+                className="text-xs text-emerald-600 flex items-center gap-1 font-medium hover:text-emerald-700"
+              >
+                <Check size={14} /> Mark all read
+              </button>
             </div>
             <div className="divide-y divide-gray-100 max-h-80 overflow-y-auto">
               {notifications.length === 0 ? (
@@ -137,9 +131,6 @@ export default function TopNav({
           )}
         </div>
 
-        <button className="hover:text-gray-800 transition-colors">
-          <Grid size={20} />
-        </button>
       </div>
     </header>
   );
