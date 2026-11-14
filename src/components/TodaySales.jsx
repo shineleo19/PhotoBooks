@@ -9,7 +9,6 @@ import {
   Printer,
   Download,
   Wallet,
-  Package,
   CalendarRange,
   FileSpreadsheet,
   BarChart3,
@@ -57,11 +56,35 @@ function parseSaleDate(sale) {
   return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
 }
 
+function getLocalDateKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function getVisibleInvoiceItems(items) {
+  const packageIds = new Set(
+    items
+      .filter((item) => !item.displayOnly && (item.isPackage === true || Number(item.isPackage) === 1))
+      .map((item) => String(item.id))
+  );
+  return items.filter((item) => {
+    if (!item.displayOnly) return true;
+    if (item.packageItemId != null) return packageIds.has(String(item.packageItemId));
+    return items.some(
+      (parent) =>
+        !parent.displayOnly &&
+        (parent.isPackage === true || Number(parent.isPackage) === 1) &&
+        parent.name === item.packageName
+    );
+  });
+}
+
 export default function TodaySales({ sales = [] }) {
   const [selectedSale, setSelectedSale] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [selectedCategory, setSelectedCategory] = useState('All categories');
-  const materialCostRatio = 35;
+  const [periodView, setPeriodView] = useState('month');
+  const [ledgerSearch, setLedgerSearch] = useState('');
+  const [todayDateKey, setTodayDateKey] = useState(() => getLocalDateKey(new Date()));
 
   const availableMonths = useMemo(() => {
     const months = new Set([selectedMonth]);
@@ -74,7 +97,7 @@ export default function TodaySales({ sales = [] }) {
     return [...months].sort().reverse();
   }, [sales, selectedMonth]);
 
-  const filteredSales = useMemo(
+  const monthSales = useMemo(
     () =>
       sales.filter((sale) => {
         const parsedDate = parseSaleDate(sale);
@@ -84,6 +107,15 @@ export default function TodaySales({ sales = [] }) {
       }),
     [sales, selectedMonth]
   );
+
+  const filteredSales = useMemo(() => {
+    if (periodView !== 'today') return monthSales;
+
+    return sales.filter((sale) => {
+      const parsedDate = parseSaleDate(sale);
+      return parsedDate ? getLocalDateKey(parsedDate) === todayDateKey : false;
+    });
+  }, [sales, monthSales, periodView, todayDateKey]);
 
   const categoryOptions = useMemo(() => {
     const categories = new Set();
@@ -103,6 +135,24 @@ export default function TodaySales({ sales = [] }) {
       )
     );
   }, [filteredSales, selectedCategory]);
+
+  const monthlyCategorySales = useMemo(() => {
+    if (selectedCategory === 'All categories') return monthSales;
+    return monthSales.filter((sale) =>
+      (Array.isArray(sale.items) ? sale.items : []).some(
+        (item) => (item.category || 'Uncategorized') === selectedCategory
+      )
+    );
+  }, [monthSales, selectedCategory]);
+
+  const ledgerSales = useMemo(() => {
+    const query = ledgerSearch.trim().toLowerCase();
+    if (!query) return categorySales;
+    return categorySales.filter((sale) =>
+      [sale.invoiceNo, sale.customerName, sale.customerPlace, sale.customerPhone]
+        .some((value) => String(value || '').toLowerCase().includes(query))
+    );
+  }, [categorySales, ledgerSearch]);
 
   const categoryAnalysis = useMemo(() => {
     const summary = new Map();
@@ -133,11 +183,18 @@ export default function TodaySales({ sales = [] }) {
     });
 
     const rows = [...summary.values()]
-      .map((row) => ({
-        ...row,
-        invoices: row.invoices.size,
-        averageOrderValue: row.invoices ? row.revenue / row.invoices : 0,
-      }))
+      .map((row) => {
+        const invCount =
+          Number(row.invoices?.size ?? row.invoiceCount ?? row.invoices ?? row.count ?? 1) || 1;
+        const revenueValue = Number(row.revenue || 0);
+        const revenue = Number.isFinite(revenueValue) ? revenueValue : 0;
+        return {
+          ...row,
+          revenue,
+          invoices: invCount,
+          averageOrderValue: revenue / invCount,
+        };
+      })
       .sort((a, b) => b.revenue - a.revenue);
     const totalRevenue = rows.reduce((sum, row) => sum + row.revenue, 0);
     return rows.map((row) => ({
@@ -152,7 +209,6 @@ export default function TodaySales({ sales = [] }) {
     let cgst = 0;
     let sgst = 0;
     let taxableRevenue = 0;
-    let estimatedMaterialCost = 0;
     let collectedAmount = 0;
     let outstandingAmount = 0;
     let paidInvoices = 0;
@@ -174,33 +230,12 @@ export default function TodaySales({ sales = [] }) {
       outstandingAmount += Number(sale.balanceAmount ?? Math.max(0, grandTotal - Number(sale.paidAmount ?? grandTotal)));
       if (Number(sale.balanceAmount ?? 0) > 0) pendingInvoices += 1;
       else paidInvoices += 1;
-
-      // If sale items have explicit unit costPrice, use it; otherwise apply the studio material ratio
-      const hasExplicitCost =
-        Array.isArray(sale.items) &&
-        sale.items.length > 0 &&
-        sale.items.some((i) => i.costPrice !== undefined);
-
-      if (hasExplicitCost) {
-        estimatedMaterialCost += sale.items.reduce(
-          (sum, item) => sum + Number(item.costPrice || 0) * Number(item.qty || 1),
-          0
-        );
-      } else {
-        estimatedMaterialCost += subtotal * (materialCostRatio / 100);
-      }
     });
-
-    const netProfit = taxableRevenue - estimatedMaterialCost;
-    const profitMargin = taxableRevenue > 0 ? (netProfit / taxableRevenue) * 100 : 0;
 
     return {
       grossRevenue,
       totalGst,
       taxableRevenue,
-      estimatedMaterialCost,
-      netProfit,
-      profitMargin,
       cgst,
       sgst,
       collectedAmount,
@@ -212,13 +247,13 @@ export default function TodaySales({ sales = [] }) {
   }, [filteredSales]);
 
   const exportLedgerToCSV = () => {
-    if (categorySales.length === 0) return;
+    if (monthlyCategorySales.length === 0) return;
 
     const headers = [
-      'Invoice No,Date,Client Name,Customer Phone,Items Count,Taxable Subtotal,CGST,SGST,Total GST,Grand Total,Paid Amount,Outstanding Balance,Estimated Material Cost,Estimated Profit,Payment Status\n',
+      'Invoice No,Date,Client Name,Customer Phone,Items Count,Taxable Subtotal,CGST,SGST,Total GST,Grand Total,Paid Amount,Outstanding Balance,Payment Status\n',
     ];
 
-    const rows = categorySales.map((sale) => {
+    const rows = monthlyCategorySales.map((sale) => {
       const grandTotal = Number(sale.grandTotal ?? sale.total ?? 0);
       const cgst = Number(sale.cgst ?? 0);
       const sgst = Number(sale.sgst ?? 0);
@@ -228,8 +263,6 @@ export default function TodaySales({ sales = [] }) {
       const outstandingBalance = Number(
         sale.balanceAmount ?? Math.max(0, grandTotal - paidAmount)
       );
-      const estimatedCost = subtotal * (materialCostRatio / 100);
-      const estimatedProfit = subtotal - estimatedCost;
       const itemCount = Array.isArray(sale.items)
         ? sale.items.reduce((sum, i) => sum + Number(i.qty || 1), 0)
         : 1;
@@ -250,8 +283,6 @@ export default function TodaySales({ sales = [] }) {
         grandTotal.toFixed(2),
         paidAmount.toFixed(2),
         outstandingBalance.toFixed(2),
-        estimatedCost.toFixed(2),
-        estimatedProfit.toFixed(2),
         csvValue(outstandingBalance > 0 ? 'Pending' : 'Paid'),
       ].join(',') + '\n';
     });
@@ -269,6 +300,7 @@ export default function TodaySales({ sales = [] }) {
     month: 'long',
     year: 'numeric',
   });
+  const periodLabel = periodView === 'today' ? "Today's Sales" : monthLabel;
 
   const formatCurrency = (value) =>
     `₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -287,23 +319,54 @@ export default function TodaySales({ sales = [] }) {
             </p>
           </div>
         </div>
-        <label className="flex items-center gap-2 text-xs font-semibold text-gray-600">
-          Accounting month
-          <select
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(e.target.value)}
-            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-800 outline-none focus:border-indigo-500"
-          >
-            {availableMonths.map((month) => (
-              <option key={month} value={month}>
-                {new Date(`${month}-01T00:00:00`).toLocaleDateString('en-IN', {
-                  month: 'long',
-                  year: 'numeric',
-                })}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <label className="flex items-center gap-2 text-xs font-semibold text-gray-600">
+            Accounting month
+            <select
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-800 outline-none focus:border-indigo-500"
+            >
+              {availableMonths.map((month) => (
+                <option key={month} value={month}>
+                  {new Date(`${month}-01T00:00:00`).toLocaleDateString('en-IN', {
+                    month: 'long',
+                    year: 'numeric',
+                  })}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1">
+            <button
+              type="button"
+              onClick={() => {
+                setTodayDateKey(getLocalDateKey(new Date()));
+                setPeriodView('today');
+              }}
+              aria-pressed={periodView === 'today'}
+              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+                periodView === 'today'
+                  ? 'bg-indigo-600 text-white'
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              Today&apos;s Sales
+            </button>
+            <button
+              type="button"
+              onClick={() => setPeriodView('month')}
+              aria-pressed={periodView === 'month'}
+              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+                periodView === 'month'
+                  ? 'bg-indigo-600 text-white'
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              Full Month
+            </button>
+          </div>
+        </div>
       </section>
 
       <section className="grid grid-cols-1 gap-4 rounded-2xl border border-gray-100 bg-white p-5 shadow-[0_2px_12px_rgba(0,0,0,0.04)] sm:grid-cols-2 lg:grid-cols-4 print:hidden">
@@ -324,9 +387,10 @@ export default function TodaySales({ sales = [] }) {
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">Tax control</p>
           <p className="mt-1 font-semibold text-gray-900">
-            CGST {formatCurrency(analytics.cgst)}
+            CGST {formatCurrency(analytics.cgst)} ·
+            SGST {formatCurrency(analytics.sgst)}
           </p>
-          <p className="mt-1 text-xs text-gray-500">SGST {formatCurrency(analytics.sgst)}</p>
+          {/* <p className="mt-1 font-semibold text-gray-900">SGST {formatCurrency(analytics.sgst)}</p> */}
         </div>
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">Audit status</p>
@@ -338,31 +402,17 @@ export default function TodaySales({ sales = [] }) {
         </div>
       </section>
 
-      {/* ROW 1: Revenue & Profit Analytics Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 print:hidden">
+      {/* ROW 1: Sales Analytics Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 print:hidden">
         <MetricCard
           label="Gross Revenue"
           value={`₹${analytics.grossRevenue.toLocaleString(undefined, {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2,
           })}`}
-          detail={`${filteredSales.length} invoices in ${monthLabel}`}
+          detail={`${filteredSales.length} invoices ${periodView === 'today' ? 'today' : `in ${monthLabel}`}`}
           icon={TrendingUp}
           tone="blue"
-        />
-        <MetricCard
-          label="Est. Raw Material Cost"
-          value={formatCurrency(analytics.estimatedMaterialCost)}
-          detail={`Sheets, gum, ink & pads (${materialCostRatio}% est.)`}
-          icon={Package}
-          tone="amber"
-        />
-        <MetricCard
-          label="Net Studio Profit"
-          value={formatCurrency(analytics.netProfit)}
-          detail={`${analytics.profitMargin.toFixed(1)}% net margin after materials & tax`}
-          icon={Wallet}
-          tone="emerald"
         />
         <MetricCard
           label="Total GST Collected"
@@ -370,6 +420,27 @@ export default function TodaySales({ sales = [] }) {
           detail={`CGST ${formatCurrency(analytics.cgst)} · SGST ${formatCurrency(analytics.sgst)}`}
           icon={Receipt}
           tone="purple"
+        />
+        <MetricCard
+          label="Collections Received"
+          value={formatCurrency(analytics.collectedAmount)}
+          detail={`Against ${formatCurrency(analytics.grossRevenue)} billed`}
+          icon={Wallet}
+          tone="emerald"
+        />
+        <MetricCard
+          label="Outstanding Balance"
+          value={formatCurrency(analytics.outstandingAmount)}
+          detail="Pending customer receivables"
+          icon={Clock}
+          tone="amber"
+        />
+        <MetricCard
+          label="Taxable Revenue"
+          value={formatCurrency(analytics.taxableRevenue)}
+          detail="Before CGST and SGST"
+          icon={FileSpreadsheet}
+          tone="indigo"
         />
       </div>
 
@@ -381,7 +452,7 @@ export default function TodaySales({ sales = [] }) {
               <BarChart3 size={17} className="text-indigo-600" /> Category Performance Analysis
             </h3>
             <p className="mt-1 text-xs text-gray-500">
-              Compare revenue contribution, volume, and order economics for {monthLabel}.
+              Compare revenue contribution, volume, and order economics for {periodLabel}.
             </p>
           </div>
           <label className="flex items-center gap-2 text-xs font-semibold text-gray-600">
@@ -456,51 +527,40 @@ export default function TodaySales({ sales = [] }) {
         )}
       </section>
 
-      <section className="grid grid-cols-1 gap-4 md:grid-cols-3 print:hidden">
-        <MetricCard
-          label="Collections Received"
-          value={formatCurrency(analytics.collectedAmount)}
-          detail={`Against ${formatCurrency(analytics.grossRevenue)} billed`}
-          icon={Wallet}
-          tone="emerald"
-        />
-        <MetricCard
-          label="Outstanding Balance"
-          value={formatCurrency(analytics.outstandingAmount)}
-          detail="Pending customer receivables"
-          icon={Clock}
-          tone="amber"
-        />
-        <MetricCard
-          label="Taxable Revenue"
-          value={formatCurrency(analytics.taxableRevenue)}
-          detail="Before CGST and SGST"
-          icon={FileSpreadsheet}
-          tone="indigo"
-        />
-      </section>
-
       {/* ROW 3: Sales Ledger Table with CSV Export */}
       <section className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-[0_2px_12px_rgba(0,0,0,0.04)] print:hidden">
         <div className="flex flex-col justify-between gap-4 border-b border-gray-50 p-6 sm:flex-row sm:items-center">
           <div>
             <h3 className="font-semibold text-gray-900">Sales Ledger & Invoice History</h3>
             <p className="mt-1 text-xs text-gray-400">
-              Audit-ready transaction ledger for {monthLabel}.
+              Audit-ready transaction ledger for {periodLabel}.
             </p>
           </div>
 
-          <button
-            onClick={exportLedgerToCSV}
-            disabled={categorySales.length === 0}
-            className={`flex items-center gap-2 rounded-xl border px-4 py-2 text-xs font-semibold transition-colors ${
-              categorySales.length === 0
-                ? 'border-gray-100 bg-gray-50 text-gray-300 cursor-not-allowed'
-                : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 cursor-pointer'
-            }`}
-          >
-            <Download size={15} /> Export Monthly Audit CSV
-          </button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <label className="flex min-w-0 items-center rounded-xl border border-gray-200 bg-[#f8f9fb] px-3 py-2 sm:w-72">
+              <Filter size={15} className="mr-2 shrink-0 text-gray-400" />
+              <input
+                type="search"
+                value={ledgerSearch}
+                onChange={(e) => setLedgerSearch(e.target.value)}
+                placeholder="Search invoice, client, phone..."
+                aria-label="Search invoice, client, phone"
+                className="w-full bg-transparent text-sm text-gray-800 outline-none"
+              />
+            </label>
+            <button
+              onClick={exportLedgerToCSV}
+              disabled={monthlyCategorySales.length === 0}
+              className={`flex items-center justify-center gap-2 rounded-xl border px-4 py-2 text-xs font-semibold transition-colors ${
+                monthlyCategorySales.length === 0
+                  ? 'border-gray-100 bg-gray-50 text-gray-300 cursor-not-allowed'
+                  : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 cursor-pointer'
+              }`}
+            >
+              <Download size={15} /> Export Monthly Audit CSV
+            </button>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
@@ -510,26 +570,30 @@ export default function TodaySales({ sales = [] }) {
                 <th className="p-4">Time & Invoice No</th>
                 <th className="p-4">Client Details</th>
                 <th className="p-4 text-center">Status</th>
+                <th className="p-4 text-right">Taxable Amt</th>
                 <th className="p-4 text-right">Tax (GST)</th>
-                <th className="p-4 text-right">Est. Profit</th>
                 <th className="p-4 text-right">Total Amount</th>
                 <th className="p-4 text-center">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 text-sm">
-              {categorySales.length === 0 ? (
+              {ledgerSales.length === 0 ? (
                 <tr>
                   <td colSpan="7" className="p-12 text-center text-gray-400">
                     <Clock size={32} className="mx-auto mb-3 text-gray-300" />
-                    <p>No sales recorded for {monthLabel} and the selected category.</p>
+                    <p>
+                      {ledgerSearch.trim()
+                        ? 'No invoices match your search.'
+                        : `No sales recorded for ${periodLabel} and the selected category.`}
+                    </p>
                   </td>
                 </tr>
               ) : (
-                categorySales.map((sale) => {
+                ledgerSales.map((sale) => {
                   const grandTotal = Number(sale.grandTotal ?? sale.total ?? 0);
                   const gst = Number(sale.cgst ?? 0) + Number(sale.sgst ?? 0);
-                  const taxable = Number(sale.subtotal ?? Math.max(0, grandTotal - gst));
-                  const estProfit = taxable * ((100 - materialCostRatio) / 100);
+                  const taxableAmount = grandTotal - gst;
+                  const balance = Number(sale.balanceAmount ?? 0);
 
                   return (
                     <tr key={sale.invoiceNo} className="hover:bg-gray-50/70">
@@ -546,15 +610,26 @@ export default function TodaySales({ sales = [] }) {
                         </p>
                       </td>
                       <td className="p-4 text-center">
-                        <span className="bg-emerald-50 text-emerald-700 border border-emerald-100 text-[11px] font-bold px-2 py-0.5 rounded">
-                          {sale.synced ? 'Cloud Synced' : 'Saved Locally'}
-                        </span>
+                        <div className="flex flex-col items-center gap-1">
+                          <span className="bg-emerald-50 text-emerald-700 border border-emerald-100 text-[11px] font-bold px-2 py-0.5 rounded">
+                            {sale.synced ? 'Cloud Synced' : 'Saved Locally'}
+                          </span>
+                          <span
+                            className={`rounded border px-2 py-0.5 text-[11px] font-bold ${
+                              balance > 0
+                                ? 'border-amber-100 bg-amber-50 text-amber-700'
+                                : 'border-emerald-100 bg-emerald-50 text-emerald-700'
+                            }`}
+                          >
+                            {balance > 0 ? `Pending (${formatCurrency(balance)})` : 'Paid'}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="p-4 text-right font-medium text-gray-700">
+                        ₹{taxableAmount.toFixed(2)}
                       </td>
                       <td className="p-4 text-right text-purple-600 font-medium">
                         ₹{gst.toFixed(2)}
-                      </td>
-                      <td className="p-4 text-right text-emerald-600 font-semibold">
-                        ₹{estProfit.toFixed(2)}
                       </td>
                       <td className="p-4 text-right font-bold text-indigo-600">
                         ₹{grandTotal.toFixed(2)}
@@ -624,7 +699,7 @@ export default function TodaySales({ sales = [] }) {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {selectedSale.items.map((item, idx) => (
+                      {getVisibleInvoiceItems(selectedSale.items).map((item, idx) => (
                         <tr key={idx}>
                           <td className="p-2.5 font-medium text-gray-900">{item.name}</td>
                           <td className="p-2.5 text-center">{item.qty}</td>

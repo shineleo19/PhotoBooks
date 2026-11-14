@@ -1,5 +1,5 @@
 // src/App.jsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { API_BASE_URL } from './api';
 import Sidebar from './components/Sidebar';
 import TopNav from './components/TopNav';
@@ -7,7 +7,6 @@ import BrowserTabs from './components/BrowserTabs';
 import Dashboard from './components/Dashboard';
 import Inventory from './components/Inventory';
 import BillingPOS from './components/BillingPOS';
-import Warehouse from './components/Warehouse';
 import TodaySales from './components/TodaySales';
 import PendingActions from './components/PendingActions';
 import SearchModal from './components/SearchModal';
@@ -24,14 +23,35 @@ const defaultBusinessInfo = {
   terminalId: 'POS-MAIN-01',
 };
 
+const tracksStock = (item) => item.stockTracked !== false && item.stockTracked !== 0;
+const NOTIFICATIONS_STORAGE_KEY = 'businessos_notifications_v1';
+const MAX_NOTIFICATIONS = 30;
+const isSampleNotification = (notification) =>
+  notification.id === 'startup-low-stock' ||
+  notification.id === 'startup-ready' ||
+  notification.title === 'Studio System Ready' ||
+  (notification.title === 'Low Raw Material Alert' &&
+    notification.message === 'Double-Sided Red Tape & Binding Gum are below minimum level.');
+
+const normalizeNotifications = (value) =>
+  Array.isArray(value)
+    ? value
+        .filter((notification) => notification && notification.id && !isSampleNotification(notification))
+        .map((notification) => ({
+          id: String(notification.id),
+          type: notification.type || 'info',
+          title: String(notification.title || ''),
+          message: String(notification.message || ''),
+          createdAt: notification.createdAt || new Date(0).toISOString(),
+          read: notification.read === true,
+        }))
+        .slice(0, MAX_NOTIFICATIONS)
+    : [];
+
 export default function App() {
   const [isSidebarPinned, setIsSidebarPinned] = useState(false);
   const [isSidebarHovered, setIsSidebarHovered] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-
-  // Page Loader States
-  const [isLoading, setIsLoading] = useState(true);
-  const [isLoaderExiting, setIsLoaderExiting] = useState(false);
 
   const [darkMode, setDarkMode] = useState(() => {
     return localStorage.getItem('businessos_theme') === 'dark';
@@ -62,25 +82,70 @@ export default function App() {
   }, [businessInfo]);
 
   const [items, setItems] = useState([]);
+  const [itemsLoaded, setItemsLoaded] = useState(false);
   const [sales, setSales] = useState([]);
   const [customers, setCustomers] = useState([]);
 
-  const [notifications, setNotifications] = useState([
-    {
-      id: 'n1',
-      type: 'warning',
-      title: 'Low Raw Material Alert',
-      message: 'Double-Sided Red Tape & Binding Gum are below minimum level.',
-      read: false,
-    },
-    {
-      id: 'n2',
-      type: 'sale',
-      title: 'Studio System Ready',
-      message: 'Photo Books Tirunelveli GST billing & archive active.',
-      read: false,
-    },
-  ]);
+  const [notificationState, setNotificationState] = useState(() => {
+    try {
+      const saved = localStorage.getItem(NOTIFICATIONS_STORAGE_KEY);
+      if (saved !== null) {
+        const normalized = normalizeNotifications(JSON.parse(saved));
+        return {
+          notifications: normalized,
+          snapshot: saved,
+        };
+      }
+    } catch (error) {
+      console.error('Failed to load notifications:', error);
+    }
+
+    return { notifications: [], snapshot: null };
+  });
+  const notifications = notificationState.notifications;
+  const notificationStorageSnapshot = useRef(notificationState.snapshot);
+  const setNotifications = (updater) => {
+    setNotificationState((current) => {
+      const nextNotifications =
+        typeof updater === 'function' ? updater(current.notifications) : updater;
+      if (nextNotifications === current.notifications) return current;
+      return {
+        notifications: nextNotifications,
+        snapshot: current.snapshot,
+      };
+    });
+  };
+  const [toast, setToast] = useState(null);
+
+  useEffect(() => {
+    const serialized = JSON.stringify(notifications);
+    if (serialized === notificationStorageSnapshot.current) return;
+
+    try {
+      localStorage.setItem(NOTIFICATIONS_STORAGE_KEY, serialized);
+      notificationStorageSnapshot.current = serialized;
+    } catch (error) {
+      console.error('Failed to save notifications:', error);
+    }
+  }, [notifications]);
+
+  useEffect(() => {
+    if (!itemsLoaded) return;
+
+    const activeLowStockIds = new Set(
+      items
+        .filter((item) => tracksStock(item) && item.stock <= item.minStock)
+        .map((item) => `low-stock-${item.id}`)
+    );
+    setNotifications((current) => {
+      const next = current.filter(
+        (notification) =>
+          !notification.id.startsWith('low-stock-') ||
+          activeLowStockIds.has(notification.id)
+      );
+      return next.length === current.length ? current : next;
+    });
+  }, [items, itemsLoaded]);
 
   const [openTabs, setOpenTabs] = useState(() => {
     try {
@@ -117,14 +182,13 @@ export default function App() {
   }, [activeTab, openTabs]);
 
   useEffect(() => {
-    const minDisplayTime = new Promise((resolve) => setTimeout(resolve, 1100));
-
     const fetchItems = fetch(`${API_BASE_URL}/api/items`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (Array.isArray(data)) setItems(data);
       })
-      .catch((err) => console.error('Failed to load items:', err));
+      .catch((err) => console.error('Failed to load items:', err))
+      .finally(() => setItemsLoaded(true));
 
     const fetchSales = fetch(`${API_BASE_URL}/api/sales`)
       .then((r) => (r.ok ? r.json() : null))
@@ -140,10 +204,7 @@ export default function App() {
       })
       .catch((err) => console.error('Failed to load customers:', err));
 
-    Promise.allSettled([fetchItems, fetchSales, fetchCustomers, minDisplayTime]).then(() => {
-      setIsLoaderExiting(true);
-      setTimeout(() => setIsLoading(false), 500);
-    });
+    Promise.allSettled([fetchItems, fetchSales, fetchCustomers]);
   }, []);
 
   useEffect(() => {
@@ -178,44 +239,60 @@ export default function App() {
     });
   };
 
-  const markNotificationsRead = () => {
-    setNotifications((current) => current.map((n) => ({ ...n, read: true })));
-  };
-
-  const handleCompleteBill = (billRecord) => {
-    const newAlerts = [];
-    setSales((currentSales) => [billRecord, ...currentSales]);
-
-    setItems((currentItems) =>
-      currentItems.map((item) => {
-        const billedItem = billRecord.items.find((b) => b.id === item.id);
-        if (!billedItem) return item;
-
-        const updatedStock = Math.max(0, item.stock - billedItem.qty);
-
-        if (updatedStock <= item.minStock) {
-          newAlerts.push({
-            id: `low-${Date.now()}-${item.id}`,
-            type: 'warning',
-            title: 'Low Raw Material Alert',
-            message: `${item.name} dropped to ${updatedStock} units after billing.`,
-            read: false,
-          });
-        }
-
-        return { ...item, stock: updatedStock };
-      })
-    );
-
-    const saleNotification = {
-      id: `bill-${Date.now()}`,
-      type: 'sale',
-      title: `Invoice Confirmed (${billRecord.invoiceNo})`,
-      message: `Billed ₹${billRecord.grandTotal.toFixed(2)} to ${billRecord.customerName}.`,
+  const notify = (title, message, type = 'info', notificationId) => {
+    const notification = {
+      id: notificationId || `${type}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      type,
+      title,
+      message,
+      createdAt: new Date().toISOString(),
       read: false,
     };
+    setNotifications((current) => {
+      if (current.some((item) => item.id === notification.id)) return current;
+      return [notification, ...current].slice(0, MAX_NOTIFICATIONS);
+    });
+    setToast(notification);
+    window.setTimeout(() => {
+      setToast((current) => (current?.id === notification.id ? null : current));
+    }, 4000);
+  };
 
-    setNotifications((current) => [saleNotification, ...newAlerts, ...current]);
+  const markNotificationsRead = () => {
+    setNotifications((current) => {
+      if (!current.some((notification) => !notification.read)) return current;
+      return current.map((notification) => ({ ...notification, read: true }));
+    });
+  };
+
+  const handleCompleteBill = (billRecord, updatedCustomers, updatedInventory, deductedMaterialIds = []) => {
+    const authoritativeItems = Array.isArray(updatedInventory) ? updatedInventory : items;
+    const deductedIds = new Set(deductedMaterialIds);
+    const newAlerts = authoritativeItems.flatMap((item) => {
+      if (!deductedIds.has(item.id) || !tracksStock(item)) return [];
+      return item.stock <= item.minStock
+        ? [
+            {
+              id: `low-stock-${item.id}`,
+              type: 'warning',
+              title: 'Low Raw Material Alert',
+              message: `${item.name} is at ${item.stock} units after billing.`,
+            },
+          ]
+        : [];
+    });
+    setSales((currentSales) => [billRecord, ...currentSales]);
+    if (Array.isArray(updatedInventory)) setItems(updatedInventory);
+    if (Array.isArray(updatedCustomers)) setCustomers(updatedCustomers);
+
+    notify(
+      `Invoice Confirmed (${billRecord.invoiceNo})`,
+      `Billed ₹${billRecord.grandTotal.toFixed(2)} to ${billRecord.customerName}.`,
+      'sale'
+    );
+    newAlerts.forEach((alert) =>
+      notify(alert.title, alert.message, alert.type, alert.id)
+    );
   };
 
   // In src/App.jsx, add this handler right below handleCompleteBill:
@@ -234,16 +311,7 @@ const handlePayCustomerBalance = async (customerId, amountPaid) => {
     if (Array.isArray(data.customers)) setCustomers(data.customers);
     if (Array.isArray(data.sales)) setSales(data.sales);
 
-    setNotifications((current) => [
-      {
-        id: `pay-${Date.now()}`,
-        type: 'sale',
-        title: 'Customer Pending Payment Received',
-        message: data.message,
-        read: false,
-      },
-      ...current,
-    ]);
+    notify('Customer Payment Received', data.message, 'sale');
 
     return { success: true, message: data.message };
   } catch (err) {
@@ -252,7 +320,7 @@ const handlePayCustomerBalance = async (customerId, amountPaid) => {
 };  
 
   return (
-    <div className="min-h-screen w-full flex bg-[#f8f9fb] transition-colors duration-200">
+    <div className="min-h-screen w-full min-w-0 flex overflow-x-hidden bg-[#f8f9fb] transition-colors duration-200">
       
 
       <Sidebar
@@ -265,9 +333,11 @@ const handlePayCustomerBalance = async (customerId, amountPaid) => {
       />
 
       <main
-        className={`flex-1 min-w-0 flex flex-col min-h-screen transition-all duration-200 ${
-          isSidebarPinned ? 'ml-64' : 'ml-[68px]'
-        }`}
+        className="min-w-0 flex-none flex min-h-screen flex-col transition-all duration-200"
+        style={{
+          marginLeft: isSidebarPinned ? '16rem' : '68px',
+          width: `calc(100% - ${isSidebarPinned ? '16rem' : '68px'})`,
+        }}
       >
         <TopNav
           onOpenSearch={() => setIsSearchOpen(true)}
@@ -277,6 +347,15 @@ const handlePayCustomerBalance = async (customerId, amountPaid) => {
           darkMode={darkMode}
           onToggleDarkMode={() => setDarkMode((prev) => !prev)}
         />
+        {toast && (
+          <div
+            role="status"
+            className="fixed right-6 top-20 z-[60] w-[min(380px,calc(100vw-3rem))] rounded-2xl border border-indigo-100 bg-white px-5 py-4 shadow-xl print:hidden"
+          >
+            <p className="text-sm font-semibold text-gray-900">{toast.title}</p>
+            <p className="mt-1 text-xs text-gray-500">{toast.message}</p>
+          </div>
+        )}
 
         <BrowserTabs
           tabs={openTabs}
@@ -285,7 +364,7 @@ const handlePayCustomerBalance = async (customerId, amountPaid) => {
           closeTab={closeTab}
         />
 
-        <div className="flex-1 w-full p-6">
+        <div className="min-w-0 flex-1 w-full p-6">
           {activeTab === 'Dashboard' && (
             <Dashboard
               openPage={openPage}
@@ -308,6 +387,7 @@ const handlePayCustomerBalance = async (customerId, amountPaid) => {
                     ? 'stock'
                     : 'overview'
               }
+              onNotify={notify}
             />
           )}
           {['GSTInvoices', 'BillingHistory'].includes(activeTab) && (
@@ -320,19 +400,21 @@ const handlePayCustomerBalance = async (customerId, amountPaid) => {
             onCompleteBill={handleCompleteBill}
             businessInfo={businessInfo}
             initialSubTab={activeTab === 'BillingHistory' ? 'history' : 'pos'}
+            onNotify={notify}
           />
         )}
-        {activeTab === 'PendingActions' && (
+        {['PendingActions', 'CustomerBalances'].includes(activeTab) && (
           <PendingActions
+            key={activeTab}
             items={items}
             customers={customers}
             onPayCustomerBalance={handlePayCustomerBalance}
+            onCustomersImported={setCustomers}
             openPage={openPage}
+            initialSection={activeTab === 'CustomerBalances' ? 'customers' : 'balances'}
+            onNotify={notify}
           />
         )}
-          {activeTab === 'Warehouse' && (
-            <Warehouse items={items} setItems={setItems} openPage={openPage} />
-          )}
           {activeTab === 'TodaySales' && <TodaySales sales={sales} />}
           
         </div>

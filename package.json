@@ -1,16 +1,19 @@
 {
   "name": "inventory-dashboard",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.2",
   "type": "module",
   "main": "main.js",
   "scripts": {
     "dev": "vite",
+    "dev:server": "node server/index.js",
+    "dev:electron": "electron .",
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
     "postinstall": "prisma generate",
-    "make-exe": "npm run build && electron-builder"
+    "make-exe": "npm run build && electron-builder",
+    "make-portable": "npm run build && electron-builder --win portable"
   },
   "build": {
     "appId": "com.shine.businessos",
@@ -22,10 +25,22 @@
       "dist/**/*",
       "server/**/*",
       "main.js",
-      "package.json"
+      "build/**/*",
+      "package.json",
+      "!**/*.db",
+      "!**/*.db-shm",
+      "!**/*.db-wal",
+      "!**/whatsapp_auth*",
+      "!**/auth_info*",
+      "!**/invoices_archive/**/*"
     ],
     "extraResources": [
-      "prisma/dev.db"
+      {
+        "from": "prisma/dev-seed.db",
+        "to": "prisma/dev.db"
+      },
+      "public/logo.jpg",
+      "public/signature.png"
     ],
     "asarUnpack": [
       "node_modules/@prisma/client/**/*",
@@ -33,7 +48,8 @@
       "node_modules/better-sqlite3/**/*"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico"
     }
   },
   "dependencies": {
@@ -53,7 +69,8 @@
     "pino": "^10.4.0",
     "qrcode": "^1.5.4",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/react": "^19.2.18",

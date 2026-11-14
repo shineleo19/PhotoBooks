@@ -2,7 +2,6 @@
 import { useState, useMemo } from 'react';
 import {
   Search,
-  Sparkles,
   X,
   FileText,
   ChevronRight,
@@ -10,13 +9,12 @@ import {
   CornerDownLeft,
   Package,
   Receipt,
-  Send,
 } from 'lucide-react';
 
+const tracksStock = (item) => item.stockTracked !== false && item.stockTracked !== 0;
+
 export default function SearchModal({ isOpen, onClose, openPage, items = [], sales = [] }) {
-  const [mode, setMode] = useState('search'); // 'search' | 'ai'
   const [query, setQuery] = useState('');
-  const [aiPrompt, setAiPrompt] = useState('');
 
   const quickActions = [
     { id: 'Dashboard', title: 'Overview', subtitle: 'Dashboard' },
@@ -24,7 +22,6 @@ export default function SearchModal({ isOpen, onClose, openPage, items = [], sal
     { id: 'PendingActions', title: 'Pending Actions', subtitle: 'Dashboard' },
     { id: 'Inventory', title: 'Manage Raw Materials & Stock', subtitle: 'Inventory & Stock' },
     { id: 'GSTInvoices', title: 'Create WhatsApp GST Invoice', subtitle: 'GST Billing' },
-    { id: 'Warehouse', title: 'Studio Storage & Racks', subtitle: 'Store Management' },
   ];
 
   // Filter pages, inventory items, and sales based on search query
@@ -54,29 +51,6 @@ export default function SearchModal({ isOpen, onClose, openPage, items = [], sal
       .slice(0, 3);
   }, [query, sales]);
 
-  // Built-in offline studio assistant for the "Ask AI" tab
-  const aiAnswer = useMemo(() => {
-    const q = aiPrompt.trim().toLowerCase();
-    if (!q) return null;
-
-    const totalRev = sales.reduce((sum, s) => sum + (s.grandTotal || s.total || 0), 0);
-    const lowStock = items.filter((i) => i.stock <= i.minStock);
-    const stockVal = items.reduce((sum, i) => sum + i.stock * i.price, 0);
-
-    if (q.includes('revenue') || q.includes('sale') || q.includes('earn')) {
-      return `Today's gross revenue is ₹${totalRev.toLocaleString()} across ${sales.length} GST invoices.`;
-    }
-    if (q.includes('low') || q.includes('restock') || q.includes('alert') || q.includes('short')) {
-      return lowStock.length === 0
-        ? 'All raw materials (gum, tapes, sheets, ink, pads) are above minimum stock levels.'
-        : `${lowStock.length} item(s) need restocking: ${lowStock.map((i) => `${i.name} (${i.stock} left)`).join(', ')}.`;
-    }
-    if (q.includes('value') || q.includes('worth') || q.includes('inventory')) {
-      return `Your studio holds ${items.length} raw material types worth ₹${stockVal.toLocaleString()}.`;
-    }
-    return `Studio Summary: ₹${totalRev.toLocaleString()} revenue today | ${items.length} raw materials tracked | ${lowStock.length} low-stock alerts.`;
-  }, [aiPrompt, items, sales]);
-
   if (!isOpen) return null;
 
   return (
@@ -88,29 +62,10 @@ export default function SearchModal({ isOpen, onClose, openPage, items = [], sal
         onClick={(e) => e.stopPropagation()}
         className="w-[720px] bg-white rounded-2xl shadow-2xl border border-gray-200/70 overflow-hidden flex flex-col"
       >
-        {/* Top Header Tabs */}
+        {/* Search header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setMode('search')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer transition-colors ${
-                mode === 'search'
-                  ? 'bg-blue-50/80 text-blue-600'
-                  : 'text-gray-500 hover:bg-gray-50 font-medium'
-              }`}
-            >
-              <Search size={15} /> Search
-            </button>
-            <button
-              onClick={() => setMode('ai')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold cursor-pointer transition-colors ${
-                mode === 'ai'
-                  ? 'bg-blue-50/80 text-blue-600'
-                  : 'text-gray-500 hover:bg-gray-50 font-medium'
-              }`}
-            >
-              <Sparkles size={15} /> Ask AI
-            </button>
+          <div className="flex items-center gap-2 text-xs font-semibold text-blue-600">
+            <Search size={15} /> Search
           </div>
           <div className="flex items-center gap-3">
             <kbd className="border border-gray-200 rounded-md px-2 py-0.5 text-[11px] font-medium text-gray-400">
@@ -122,8 +77,7 @@ export default function SearchModal({ isOpen, onClose, openPage, items = [], sal
           </div>
         </div>
 
-        {mode === 'search' ? (
-          <>
+        <>
             {/* Search Input Box */}
             <div className="p-6 pb-3">
               <div className="flex items-center border border-blue-300 rounded-xl px-4 py-3 bg-white shadow-2xs">
@@ -202,12 +156,16 @@ export default function SearchModal({ isOpen, onClose, openPage, items = [], sal
                       </div>
                       <span
                         className={`text-xs font-semibold px-2.5 py-1 rounded-md ${
-                          item.stock <= item.minStock
-                            ? 'bg-red-50 text-red-600'
-                            : 'bg-emerald-50 text-emerald-600'
+                          !tracksStock(item)
+                            ? 'bg-gray-100 text-gray-500'
+                            : item.stock <= item.minStock
+                              ? 'bg-red-50 text-red-600'
+                              : 'bg-emerald-50 text-emerald-600'
                         }`}
                       >
-                        {item.stock} in stock
+                        {tracksStock(item)
+                          ? `${item.stock} ${item.baseUnit || 'Pieces'} in stock`
+                          : 'Not tracked'}
                       </span>
                     </button>
                   ))}
@@ -246,49 +204,7 @@ export default function SearchModal({ isOpen, onClose, openPage, items = [], sal
                 </div>
               )}
             </div>
-          </>
-        ) : (
-          /* ASK AI TAB */
-          <div className="p-6 space-y-4">
-            <div className="flex items-center border border-purple-300 rounded-xl px-4 py-3 bg-white shadow-2xs">
-              <Sparkles size={18} className="text-purple-500 mr-3 shrink-0" />
-              <input
-                type="text"
-                autoFocus
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-                placeholder="Ask about today's revenue, low stock materials, or inventory value..."
-                className="w-full text-sm text-gray-800 outline-none bg-transparent"
-              />
-              <Send size={16} className="text-purple-500 shrink-0" />
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              {[
-                "What is today's revenue?",
-                'Which raw materials are low on stock?',
-                'What is our total inventory value?',
-              ].map((q) => (
-                <button
-                  key={q}
-                  onClick={() => setAiPrompt(q)}
-                  className="text-xs bg-gray-100 hover:bg-purple-50 hover:text-purple-700 text-gray-600 px-3 py-1.5 rounded-lg font-medium transition-colors cursor-pointer"
-                >
-                  {q}
-                </button>
-              ))}
-            </div>
-
-            {aiAnswer && (
-              <div className="bg-purple-50/70 border border-purple-100 rounded-xl p-4 text-xs text-gray-800 leading-relaxed">
-                <p className="font-semibold text-purple-700 mb-1 flex items-center gap-1.5">
-                  <Sparkles size={14} /> Studio AI Assistant
-                </p>
-                {aiAnswer}
-              </div>
-            )}
-          </div>
-        )}
+        </>
 
         {/* Footer Bar */}
         <div className="px-6 py-3.5 bg-gray-50/80 border-t border-gray-100 flex items-center justify-between text-xs text-gray-400">
@@ -300,9 +216,6 @@ export default function SearchModal({ isOpen, onClose, openPage, items = [], sal
               <CornerDownLeft size={13} /> Select
             </span>
             <span>Esc Close</span>
-          </div>
-          <div className="font-medium text-gray-400">
-            Powered by <span className="text-gray-600 font-semibold">business.ai</span>
           </div>
         </div>
       </div>

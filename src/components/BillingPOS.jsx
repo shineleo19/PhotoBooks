@@ -1,6 +1,7 @@
 // src/components/BillingPOS.jsx
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { API_BASE_URL } from '../api';
+import { rankItems } from '../utils/itemSearch';
 import {
   Search,
   Plus,
@@ -23,7 +24,54 @@ import {
   FilePlus2,
   PlusCircle,
   UserPlus,
+  AlertTriangle,
+  Save,
 } from 'lucide-react';
+
+const BILLING_DRAFT_STORAGE_KEY = 'photobooks_billing_draft';
+
+const loadBillingDraft = () => {
+  try {
+    const savedDraft = JSON.parse(sessionStorage.getItem(BILLING_DRAFT_STORAGE_KEY) || 'null');
+    return savedDraft && typeof savedDraft === 'object' ? savedDraft : {};
+  } catch (error) {
+    console.warn('Unable to restore the current billing draft:', error);
+    return {};
+  }
+};
+
+const expandPackageItems = (items, catalog) => {
+  const catalogById = new Map(catalog.map((item) => [item.id, item]));
+  const expanded = [];
+  const appendChildren = (parent, quantity, packageName, ancestors, packageItemId) => {
+    if (parent?.isPackage !== true && Number(parent?.isPackage) !== 1) return;
+    if (ancestors.has(parent.id)) return;
+    const nextAncestors = new Set(ancestors);
+    nextAncestors.add(parent.id);
+    (parent.linkedMaterials || []).forEach((material) => {
+      const child = catalogById.get(material.id) || material.materialItem || material.item || material;
+      if (!child?.id) return;
+      const displayItem = {
+        ...child,
+        name: `${child.name} (${packageName})`,
+        qty: quantity * Number(material.quantity || 1),
+        displayOnly: true,
+        packageName,
+        packageItemId,
+      };
+      expanded.push(displayItem);
+      appendChildren(child, displayItem.qty, packageName, nextAncestors, packageItemId);
+    });
+  };
+
+  items.filter((item) => !item.displayOnly).forEach((item) => {
+    expanded.push(item);
+    if (item.id && (item.isPackage === true || Number(item.isPackage) === 1)) {
+      appendChildren(item, item.qty, item.name, new Set(), item.id);
+    }
+  });
+  return expanded;
+};
 
 const numberToIndianWords = (value) => {
   const ones = [
@@ -96,12 +144,6 @@ const amountToIndianWords = (amount) => {
     : `${rupeeText} Only`;
 };
 
-const createEstimateNumber = () => {
-  const dateKey = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  const sequence = Math.floor(1000 + Math.random() * 9000);
-  return `EST-${dateKey}-${sequence}`;
-};
-
 export default function BillingPOS({
   items = [],
   setItems,
@@ -109,26 +151,36 @@ export default function BillingPOS({
   customers = [],
   setCustomers,
   onCompleteBill,
+  onNotify,
   businessInfo = {},
   initialSubTab = 'pos',
 }) {
   const storeName = businessInfo.businessName || 'PHOTO BOOKS';
-  const storeGstin = businessInfo.gstin || '33ABEPB960D1Z7';
+  const storeGstin = businessInfo.gstin || '33ABEFP8960D1Z7';
   const storeAddress =
     businessInfo.address ||
     '10/1.11/1 Parasakthi building upstairs Madrai road, Tirunelveli junction Tirunelveli';
   const storePhone = businessInfo.phone || '8754540404';
   const storeUpiId = businessInfo.upiId || 'photobooks@icici';
+  const [savedBillDraft] = useState(loadBillingDraft);
 
   const [subTab, setSubTab] = useState(initialSubTab);
+  const [isNewBillStarted, setIsNewBillStarted] = useState(
+    savedBillDraft.isNewBillStarted === true || savedBillDraft.cart?.length > 0
+  );
   const [search, setSearch] = useState('');
   const [historySearch, setHistorySearch] = useState('');
-  const [cart, setCart] = useState([]);
+  const [cart, setCart] = useState(() =>
+    Array.isArray(savedBillDraft.cart) ? savedBillDraft.cart : []
+  );
 
   // Customer Selection & Autocomplete States
-  const [customerName, setCustomerName] = useState('');
-  const [customerPlace, setCustomerPlace] = useState('');
-  const [customerPhone, setCustomerPhone] = useState('');
+  const [customerName, setCustomerName] = useState(savedBillDraft.customerName || '');
+  const [customerPlace, setCustomerPlace] = useState(savedBillDraft.customerPlace || '');
+  const [customerPhone, setCustomerPhone] = useState(savedBillDraft.customerPhone || '');
+  const [selectedCustomerId, setSelectedCustomerId] = useState(
+    savedBillDraft.selectedCustomerId || null
+  );
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const customerDropdownRef = useRef(null);
 
@@ -141,14 +193,16 @@ export default function BillingPOS({
   });
   const [isSavingCustomer, setIsSavingCustomer] = useState(false);
   const [customerError, setCustomerError] = useState('');
+  const [savingCustomerPlace, setSavingCustomerPlace] = useState(false);
 
-  // Quick Add Item to DB Modal State (Only asks for Product Price; 18% GST is automatic!)
+  // Quick Add Item to Inventory Modal State. Prices include the selected GST rate.
   const [showAddItemModal, setShowAddItemModal] = useState(false);
   const [newItemForm, setNewItemForm] = useState({
     name: '',
     sku: '',
     category: 'Photo Books',
     price: '',
+    gstRate: '18',
     stock: '100',
     minStock: '10',
   });
@@ -161,6 +215,31 @@ export default function BillingPOS({
   }, [initialSubTab]);
 
   useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        BILLING_DRAFT_STORAGE_KEY,
+        JSON.stringify({
+          isNewBillStarted,
+          cart,
+          customerName,
+          customerPlace,
+          customerPhone,
+          selectedCustomerId,
+        })
+      );
+    } catch (error) {
+      console.error('Unable to save the current billing draft:', error);
+    }
+  }, [
+    isNewBillStarted,
+    cart,
+    customerName,
+    customerPlace,
+    customerPhone,
+    selectedCustomerId,
+  ]);
+
+  useEffect(() => {
     const handleClickOutside = (e) => {
       if (customerDropdownRef.current && !customerDropdownRef.current.contains(e.target)) {
         setShowCustomerDropdown(false);
@@ -170,7 +249,29 @@ export default function BillingPOS({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  const handleUnlinkWhatsApp = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/whatsapp-unlink`, { method: 'POST' });
+      const data = await response.json().catch(() => ({}));
+      if (response.status === 404) {
+        throw new Error(
+          'The running backend is outdated. Restart it with "npm run dev:server", then try unlinking again.'
+        );
+      }
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Unable to unlink WhatsApp.');
+      }
+      setWaState({ connected: false, qrDataUrl: null });
+      setShowWaQrModal(true);
+    } catch (err) {
+      onNotify?.('WhatsApp unlink failed', err.message, 'warning');
+    }
+  };
+
   const [previewBill, setPreviewBill] = useState(null);
+  const [showBillTypeModal, setShowBillTypeModal] = useState(false);
+  const [showCompletionModal, setShowCompletionModal] = useState(false);
+  const [validationMessage, setValidationMessage] = useState('');
   const [isBillConfirmed, setIsBillConfirmed] = useState(false);
   const [whatsAppStatus, setWhatsAppStatus] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -198,6 +299,32 @@ export default function BillingPOS({
     return () => clearInterval(timer);
   }, []);
 
+  const checkWhatsAppConnection = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/whatsapp-status`);
+      if (!response.ok) {
+        throw new Error(`WhatsApp status check failed (${response.status}).`);
+      }
+      const data = await response.json();
+      const connected = data.connected === true;
+      setWaState({ connected, qrDataUrl: data.qrDataUrl || null });
+      if (connected) {
+        setShowWaQrModal(false);
+        return true;
+      }
+
+      setWhatsAppStatus('error:Link WhatsApp before continuing with this bill.');
+      setShowWaQrModal(true);
+      return false;
+    } catch (error) {
+      console.error('WhatsApp connection check failed:', error);
+      setWaState({ connected: false, qrDataUrl: null });
+      setWhatsAppStatus(`error:Unable to verify WhatsApp connection: ${error.message}`);
+      setShowWaQrModal(true);
+      return false;
+    }
+  };
+
   // Filter matching customers from DB by name, place, or phone
   const matchingCustomers = useMemo(() => {
     const q = customerName.trim().toLowerCase();
@@ -214,6 +341,7 @@ export default function BillingPOS({
   }, [customers, customerName]);
 
   const handleSelectExistingCustomer = (cust) => {
+    setSelectedCustomerId(cust.id);
     setCustomerName(cust.name);
     setCustomerPlace(cust.place || '');
     const cleanPhone = cust.phone.startsWith('NAME:')
@@ -268,6 +396,7 @@ export default function BillingPOS({
       }
       setCustomerName(data.customer.name);
       setCustomerPlace(data.customer.place || '');
+      setSelectedCustomerId(data.customer.id);
       const displayPhone = data.customer.phone.replace(/^91(\d{10})$/, '$1');
       setCustomerPhone(displayPhone);
       setShowNewCustomerModal(false);
@@ -278,7 +407,35 @@ export default function BillingPOS({
     }
   };
 
-  // Save a new item to DB (Only asks for Product Price; 18% GST is automatic)
+  const handleSaveSelectedCustomerPlace = async () => {
+    if (!selectedCustomerId || savingCustomerPlace) return;
+    setSavingCustomerPlace(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/customers/${selectedCustomerId}/place`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ place: customerPlace }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Failed to update customer place.');
+      }
+      if (setCustomers && data.customer) {
+        setCustomers((current) =>
+          current.map((customer) =>
+            customer.id === data.customer.id ? data.customer : customer
+          )
+        );
+      }
+      onNotify?.('Customer updated', 'Customer place saved successfully.', 'info');
+    } catch (error) {
+      onNotify?.('Customer update failed', error.message, 'warning');
+    } finally {
+      setSavingCustomerPlace(false);
+    }
+  };
+
+  // Save a new item to inventory. The entered price includes GST.
   const handleCreateItemInDb = async (e) => {
     e.preventDefault();
     if (!newItemForm.name.trim() || !newItemForm.price) return;
@@ -293,6 +450,7 @@ export default function BillingPOS({
           sku: newItemForm.sku.trim() || `PB-${Date.now().toString().slice(-4)}`,
           category: newItemForm.category.trim() || 'General',
           price: Number(newItemForm.price) || 0,
+          gstRate: Number(newItemForm.gstRate) || 0,
           stock: Number(newItemForm.stock) || 0,
           minStock: Number(newItemForm.minStock) || 5,
         }),
@@ -307,6 +465,7 @@ export default function BillingPOS({
           sku: '',
           category: 'Photo Books',
           price: '',
+          gstRate: '18',
           stock: '100',
           minStock: '10',
         });
@@ -318,11 +477,7 @@ export default function BillingPOS({
   };
 
   const availableItems = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter((item) =>
-      `${item.name} ${item.sku} ${item.category}`.toLowerCase().includes(q)
-    );
+    return rankItems(items, search);
   }, [items, search]);
 
   const filteredSales = useMemo(() => {
@@ -336,12 +491,11 @@ export default function BillingPOS({
   }, [sales, historySearch]);
 
   const addToCart = (product) => {
-    if (product.stock <= 0) return;
-
     setCart((current) => {
       const existing = current.find((c) => c.id === product.id);
+      const hasLinkedItems = product.linkedMaterials?.length > 0;
       if (existing) {
-        if (existing.qty + 1 > product.stock) return current;
+        if (!hasLinkedItems && product.stock > 0 && existing.qty + 1 > product.stock) return current;
         return current.map((c) =>
           c.id === product.id ? { ...c, qty: c.qty + 1 } : c
         );
@@ -360,6 +514,7 @@ export default function BillingPOS({
   const updateQty = (id, delta) => {
     const product = items.find((i) => i.id === id);
     if (!product) return;
+    const hasLinkedItems = product.linkedMaterials?.length > 0;
 
     setCart((current) =>
       current
@@ -367,7 +522,9 @@ export default function BillingPOS({
           if (c.id !== id) return c;
           const currentQty = Number(c.qty) || 0;
           const nextQty = currentQty + delta;
-          if (nextQty > product.stock) return { ...c, qty: product.stock };
+          if (!hasLinkedItems && product.stock > 0 && nextQty > product.stock) {
+            return { ...c, qty: product.stock };
+          }
           return { ...c, qty: nextQty };
         })
         .filter((c) => c.qty > 0)
@@ -377,6 +534,7 @@ export default function BillingPOS({
   const setDirectQty = (id, rawValue) => {
     const product = items.find((i) => i.id === id);
     if (!product) return;
+    const hasLinkedItems = product.linkedMaterials?.length > 0;
 
     if (rawValue === '') {
       setCart((current) =>
@@ -388,7 +546,9 @@ export default function BillingPOS({
     const parsed = parseInt(rawValue, 10);
     if (isNaN(parsed)) return;
 
-    const clampedQty = Math.min(Math.max(1, parsed), product.stock);
+    const clampedQty = !hasLinkedItems && product.stock > 0
+      ? Math.min(Math.max(1, parsed), product.stock)
+      : Math.max(1, parsed);
     setCart((current) =>
       current.map((c) => (c.id === id ? { ...c, qty: clampedQty } : c))
     );
@@ -404,28 +564,68 @@ export default function BillingPOS({
     );
   };
 
+  const setItemPrice = (id, rawValue) => {
+    const normalizedValue = rawValue.replace(/^0+(?=\d)/, '');
+    setCart((current) =>
+      current.map((item) =>
+        item.id === id ? { ...item, price: normalizedValue } : item
+      )
+    );
+  };
+
+  const handlePriceBlur = (id) => {
+    setCart((current) =>
+      current.map((item) => {
+        if (item.id !== id) return item;
+        const price = Number(item.price);
+        return { ...item, price: Number.isFinite(price) && price >= 0 ? price : 0 };
+      })
+    );
+  };
+
   const removeFromCart = (id) => {
     setCart((current) => current.filter((c) => c.id !== id));
   };
 
-  // AUTOMATIC 18% GST CALCULATIONS (9% CGST + 9% SGST)
+  // Item prices already include GST; extract the tax portion without increasing the total.
   const totalAmountOfItems = cart.reduce(
     (sum, item) => sum + (Number(item.price) || 0) * (Number(item.qty) || 0),
     0
   );
-  const totalGst18 = totalAmountOfItems * 0.18;
-  const totalCgst = totalGst18 / 2; // 9%
-  const totalSgst = totalGst18 / 2; // 9%
-  const totalAmountPlusGst = totalAmountOfItems + totalGst18;
+  const totalTaxableItems = cart.reduce((sum, item) => {
+    const lineTotal = (Number(item.price) || 0) * (Number(item.qty) || 0);
+    return sum + lineTotal / (1 + (Number(item.gstRate ?? 18) / 100));
+  }, 0);
+  const totalGst = totalAmountOfItems - totalTaxableItems;
+  const totalCgst = totalGst / 2;
+  const totalSgst = totalGst / 2;
+  const totalAmountPlusGst = totalAmountOfItems;
 
   // Open Preview Modal
-  const handleOpenPreview = (e) => {
+  const handleOpenPreview = async (e, documentType = 'Estimate') => {
     e.preventDefault();
     if (cart.length === 0) return;
 
-    // If user typed a new customer name not in DB, pop up the Add New Customer modal
-    if (customerName.trim() && !exactCustomerMatch) {
-      handleOpenNewCustomerModal(customerName.trim());
+    if (!customerName.trim()) {
+      setValidationMessage('Please enter the customer name before proceeding.');
+      return;
+    }
+
+    if (!selectedCustomerId) {
+      setValidationMessage('Please select or save the customer details before proceeding.');
+      return;
+    }
+
+    let invoiceNo;
+    try {
+      const invoiceResponse = await fetch(`${API_BASE_URL}/api/next-invoice-number`);
+      const invoiceData = await invoiceResponse.json();
+      if (!invoiceResponse.ok || !invoiceData.invoiceNo) {
+        throw new Error(invoiceData.error || 'Unable to create invoice number.');
+      }
+      invoiceNo = invoiceData.invoiceNo;
+    } catch (err) {
+      setWhatsAppStatus(`error:${err.message}`);
       return;
     }
 
@@ -438,46 +638,74 @@ export default function BillingPOS({
       .filter((item) => item.qty > 0);
 
     const calcItemsTotal = validCart.reduce((s, i) => s + i.price * i.qty, 0);
-    const calcGst18 = calcItemsTotal * 0.18;
-    const calcCgst = calcGst18 / 2;
-    const calcSgst = calcGst18 / 2;
-    const calcGrandTotal = calcItemsTotal + calcGst18;
+    const calcTaxable = validCart.reduce((sum, item) => {
+      const lineTotal = item.price * item.qty;
+      return sum + lineTotal / (1 + (Number(item.gstRate ?? 18) / 100));
+    }, 0);
+    const calcGst = calcItemsTotal - calcTaxable;
+    const calcCgst = calcGst / 2;
+    const calcSgst = calcGst / 2;
+    const calcGrandTotal = calcItemsTotal;
 
+    const displayItems = expandPackageItems(validCart, items);
     const draftBill = {
-      invoiceNo: createEstimateNumber(),
+      invoiceNo,
+      documentType,
       date: new Date().toLocaleDateString('en-IN'),
       customerName: customerName.trim() || 'Walk-in Customer',
       customerPlace: customerPlace.trim(),
       customerPhone: customerPhone.trim() || 'N/A',
-      items: validCart.map((item) => {
+      items: displayItems.map((item) => {
         const productAmt = item.price * item.qty;
-        const itemGst = productAmt * 0.18;
+        const itemGstRate = Number(item.gstRate ?? 18);
+        const itemTaxable = productAmt / (1 + itemGstRate / 100);
+        const itemGst = productAmt - itemTaxable;
         return {
           ...item,
-          taxable: productAmt,
+          lineTotal: item.displayOnly ? 0 : productAmt,
+          taxable: itemTaxable,
           itemGst,
-          lineTotal: productAmt + itemGst,
         };
       }),
-      subtotal: calcItemsTotal,
+      subtotal: calcTaxable,
       cgst: calcCgst,
       sgst: calcSgst,
-      totalTax: calcGst18,
+      totalTax: calcGst,
       grandTotal: calcGrandTotal,
     };
 
     setPreviewBill(draftBill);
     setIsBillConfirmed(false);
     setWhatsAppStatus('');
+    setShowBillTypeModal(false);
+  };
+
+  const handleChooseBillType = (documentType) => {
+    handleOpenPreview({ preventDefault: () => {} }, documentType);
   };
 
   const handleOpenHistoryBill = (sale) => {
-    const saleItems = Array.isArray(sale.items) ? sale.items : [];
+    const storedItems = Array.isArray(sale.items) ? sale.items : [];
+    const packageIds = new Set(
+      storedItems
+        .filter((item) => !item.displayOnly && (item.isPackage === true || Number(item.isPackage) === 1))
+        .map((item) => String(item.id))
+    );
+    const saleItems = storedItems.filter((item) => {
+      if (!item.displayOnly) return true;
+      if (item.packageItemId != null) return packageIds.has(String(item.packageItemId));
+      return storedItems.some(
+        (parent) =>
+          !parent.displayOnly &&
+          (parent.isPackage === true || Number(parent.isPackage) === 1) &&
+          parent.name === item.packageName
+      );
+    });
     const calcSubtotal =
       Number(sale.subtotal) ||
       saleItems.reduce((s, i) => s + Number(i.price || 0) * Number(i.qty || 1), 0);
-    const calcCgst = Number(sale.cgst || calcSubtotal * 0.09);
-    const calcSgst = Number(sale.sgst || calcSubtotal * 0.09);
+    const calcCgst = Number(sale.cgst || 0);
+    const calcSgst = Number(sale.sgst || 0);
     const calcTotalTax = calcCgst + calcSgst;
     const calcTotal = Number(sale.grandTotal ?? sale.total ?? calcSubtotal + calcTotalTax);
 
@@ -491,14 +719,16 @@ export default function BillingPOS({
         const qty = Number(i.qty || 1);
         const price = Number(i.price || 0);
         const productAmt = price * qty;
-        const itemGst = productAmt * 0.18;
+        const itemGstRate = Number(i.gstRate ?? 18);
+        const itemTaxable = productAmt / (1 + itemGstRate / 100);
+        const itemGst = productAmt - itemTaxable;
         return {
           ...i,
           price,
           qty,
-          taxable: productAmt,
+          taxable: itemTaxable,
           itemGst,
-          lineTotal: productAmt + itemGst,
+          lineTotal: productAmt,
         };
       }),
       subtotal: calcSubtotal,
@@ -530,10 +760,14 @@ export default function BillingPOS({
       return;
     }
 
+    if (sendWhatsAppToggle && !(await checkWhatsAppConnection())) {
+      return;
+    }
+
     setIsProcessing(true);
     setWhatsAppStatus(
       sendWhatsAppToggle
-        ? 'sending:Verifying WhatsApp, sending full Estimate PDF, and recording in database...'
+        ? 'sending:Checking WhatsApp link and saving bill...'
         : 'sending:Archiving full Estimate PDF and recording in database...'
     );
 
@@ -547,6 +781,7 @@ export default function BillingPOS({
           customerName: previewBill.customerName,
           customerPlace: previewBill.customerPlace,
           customerPhone: cleanPhone,
+          documentType: previewBill.documentType,
           items: previewBill.items,
           subtotal: previewBill.subtotal,
           cgst: previewBill.cgst,
@@ -564,10 +799,11 @@ export default function BillingPOS({
       const data = await response.json();
 
       if (!response.ok || !data.success) {
+        onNotify?.('Billing failed', data.error || 'Failed to complete bill.', 'warning');
         setWhatsAppStatus(
           `error:${data.error || 'Failed to complete bill. Nothing was saved to DB.'}`
         );
-        if (!waState.connected && sendWhatsAppToggle) {
+        if (sendWhatsAppToggle && (response.status === 503 || !waState.connected)) {
           setShowWaQrModal(true);
         }
         return;
@@ -578,7 +814,7 @@ export default function BillingPOS({
         pdfUrl: data.pdfUrl,
         pdfPath: data.pdfUrl,
       };
-      onCompleteBill(confirmedBill, data.customers);
+      onCompleteBill(confirmedBill, data.customers, data.items, data.deductedMaterialIds);
       setPreviewBill(confirmedBill);
       setIsBillConfirmed(true);
       setLastBill(confirmedBill);
@@ -587,12 +823,44 @@ export default function BillingPOS({
       setCustomerPlace('');
       setCustomerPhone('');
 
-      setWhatsAppStatus(`success:${data.message}`);
+      setWhatsAppStatus('');
+      onNotify?.(
+        `Invoice Confirmed (${confirmedBill.invoiceNo})`,
+        `Bill saved for ${confirmedBill.customerName}. Its PDF is uploading to Google Drive in the background. Customer balances and database backups upload daily at 6 PM.`,
+        'sale'
+      );
+      setShowCompletionModal(true);
+      const printAndDispatchWhatsApp = () => {
+        let dispatched = false;
+        const dispatchWhatsApp = async () => {
+          if (dispatched || !sendWhatsAppToggle) return;
+          dispatched = true;
+          setWhatsAppStatus('sending:Sending the invoice PDF to WhatsApp...');
+          try {
+            const whatsappResponse = await fetch(`${API_BASE_URL}/api/send-invoice-whatsapp`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ invoiceNo: confirmedBill.invoiceNo }),
+            });
+            const whatsappData = await whatsappResponse.json();
+            if (!whatsappResponse.ok || !whatsappData.success) {
+              throw new Error(whatsappData.error || 'Failed to send invoice on WhatsApp.');
+            }
+            setWhatsAppStatus('success:Invoice sent to WhatsApp.');
+            onNotify?.('WhatsApp invoice sent', `Invoice ${confirmedBill.invoiceNo} was sent successfully.`, 'sale');
+          } catch (error) {
+            setWhatsAppStatus(`error:Invoice saved, but WhatsApp sending failed: ${error.message}`);
+            onNotify?.('WhatsApp sending failed', error.message, 'warning');
+          }
+        };
 
-      setTimeout(() => {
+        if (sendWhatsAppToggle) void dispatchWhatsApp();
         window.print();
-      }, 350);
-    } catch {
+      };
+      setTimeout(printAndDispatchWhatsApp, 350);
+    } catch (error) {
+      console.error('Bill completion failed:', error);
+      onNotify?.('Billing failed', 'Network error reaching backend server.', 'warning');
       setWhatsAppStatus(
         'error:Network error reaching backend server. Bill was NOT marked as completed.'
       );
@@ -614,7 +882,10 @@ export default function BillingPOS({
         <div className="flex items-center gap-2 bg-gray-100 p-1 rounded-xl">
           <button
             type="button"
-            onClick={() => setSubTab('pos')}
+            onClick={() => {
+              setSubTab('pos');
+              setIsNewBillStarted(true);
+            }}
             className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               subTab === 'pos'
                 ? 'bg-white text-indigo-600 shadow-xs'
@@ -626,7 +897,10 @@ export default function BillingPOS({
           </button>
           <button
             type="button"
-            onClick={() => setSubTab('history')}
+            onClick={() => {
+              setSubTab('history');
+              setIsNewBillStarted(false);
+            }}
             className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
               subTab === 'history'
                 ? 'bg-white text-indigo-600 shadow-xs'
@@ -639,6 +913,7 @@ export default function BillingPOS({
         </div>
 
         <div className="flex items-center gap-2.5 text-xs">
+          {isNewBillStarted && (
           <button
             type="button"
             onClick={() => handleOpenNewCustomerModal('')}
@@ -647,6 +922,7 @@ export default function BillingPOS({
             <UserPlus size={14} />
             + New Customer
           </button>
+          )}
 
           <button
             type="button"
@@ -654,13 +930,17 @@ export default function BillingPOS({
             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold cursor-pointer"
           >
             <PlusCircle size={14} />
-            + Add Item to DB
+            + Add Item to Inventory
           </button>
 
           {waState.connected ? (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200">
-              <Wifi size={13} /> WhatsApp Connected
-            </span>
+            <button
+              type="button"
+              onClick={handleUnlinkWhatsApp}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold border border-emerald-200 cursor-pointer"
+            >
+              <Wifi size={13} /> Unlink WhatsApp
+            </button>
           ) : (
             <button
               type="button"
@@ -777,7 +1057,7 @@ export default function BillingPOS({
         </div>
       )}
 
-      {/* ADD NEW ITEM TO DB MODAL (No GST Input Asked — 18% Calculated Automatically) */}
+      {/* ADD NEW ITEM TO INVENTORY MODAL */}
       {showAddItemModal && (
         <div
           onClick={() => setShowAddItemModal(false)}
@@ -790,7 +1070,7 @@ export default function BillingPOS({
           >
             <div className="flex items-center justify-between border-b border-gray-100 pb-3">
               <h3 className="text-sm font-bold text-gray-900">
-                Add New Product to Database
+                Add New Item to Inventory
               </h3>
               <button
                 type="button"
@@ -849,12 +1129,31 @@ export default function BillingPOS({
                   />
                 </label>
                 <div className="flex justify-between text-[11px] text-indigo-700 font-semibold pt-1">
-                  <span>Auto 18% GST: ₹{((Number(newItemForm.price) || 0) * 0.18).toFixed(2)}</span>
                   <span>
-                    Amount + GST: ₹{((Number(newItemForm.price) || 0) * 1.18).toFixed(2)}
+                    Included GST ({newItemForm.gstRate}%): ₹{(
+                      (Number(newItemForm.price) || 0) -
+                      (Number(newItemForm.price) || 0) / (1 + (Number(newItemForm.gstRate) || 0) / 100)
+                    ).toFixed(2)}
+                  </span>
+                  <span>
+                    Final price: ₹{(Number(newItemForm.price) || 0).toFixed(2)}
                   </span>
                 </div>
               </div>
+
+              <label className="block font-semibold text-gray-700">
+                GST Rate (%)
+                <input
+                  required
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  value={newItemForm.gstRate}
+                  onChange={(e) => setNewItemForm({ ...newItemForm, gstRate: e.target.value })}
+                  className="mt-1 w-full rounded-xl border border-gray-200 px-3 py-2 text-sm outline-none focus:border-indigo-600"
+                />
+              </label>
 
               <div className="grid grid-cols-2 gap-3">
                 <label className="block font-semibold text-gray-700">
@@ -894,7 +1193,7 @@ export default function BillingPOS({
                 disabled={isSavingItem}
                 className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer"
               >
-                {isSavingItem ? 'Saving...' : 'Save Item to DB'}
+                {isSavingItem ? 'Saving...' : 'Add to Inventory'}
               </button>
             </div>
           </form>
@@ -910,7 +1209,7 @@ export default function BillingPOS({
                 <History size={18} className="text-indigo-600" /> Past Confirmed Estimates & Invoices
               </h3>
               <p className="text-xs text-gray-400 mt-0.5">
-                View all generated bills with Product Amount, 18% GST (CGST + SGST), and Total.
+                View all generated bills with product amount, GST (CGST + SGST), and total.
               </p>
             </div>
             <div className="flex items-center rounded-xl border border-gray-200 bg-[#f8f9fb] px-3.5 py-2 sm:w-80">
@@ -932,9 +1231,9 @@ export default function BillingPOS({
                   <th className="p-4">Date</th>
                   <th className="p-4">Customer & Place</th>
                   <th className="p-4 text-right">Amount of Items</th>
-                  <th className="p-4 text-right">SGST (9%)</th>
-                  <th className="p-4 text-right">CGST (9%)</th>
-                  <th className="p-4 text-right">Amount + GST</th>
+                  <th className="p-4 text-right">SGST</th>
+                  <th className="p-4 text-right">CGST</th>
+                  <th className="p-4 text-right">Final Amount</th>
                   <th className="p-4 text-right">Actions</th>
                 </tr>
               </thead>
@@ -984,7 +1283,6 @@ export default function BillingPOS({
                           {pdfLink && (
                             <a
                               href={pdfLink}
-                              download
                               target="_blank"
                               rel="noreferrer"
                               className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-semibold"
@@ -1010,98 +1308,24 @@ export default function BillingPOS({
         </section>
       ) : (
         /* VIEW 2: NEW BILL / POS SUB-TAB */
+        !isNewBillStarted ? (
+          <section className="rounded-2xl border border-dashed border-gray-200 bg-white p-12 text-center shadow-[0_2px_12px_rgba(0,0,0,0.04)] print:hidden">
+            <FilePlus2 size={42} className="mx-auto text-indigo-500" />
+            <h3 className="mt-4 text-lg font-bold text-gray-900">Start a New Bill</h3>
+            <p className="mt-1 text-sm text-gray-500">
+              Customer details, item selection, and bill summary will appear here.
+            </p>
+            <button
+              type="button"
+              onClick={() => setIsNewBillStarted(true)}
+              className="mt-6 inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white hover:bg-indigo-700 cursor-pointer"
+            >
+              <FilePlus2 size={17} /> New Bill
+            </button>
+          </section>
+        ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 print:hidden">
           <div className="lg:col-span-2 space-y-6">
-            <section className="bg-white rounded-2xl border border-gray-100 p-6 shadow-[0_2px_12px_rgba(0,0,0,0.04)]">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
-                <div>
-                  <h3 className="text-base font-semibold text-gray-900">Select Items for Billing</h3>
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    Click an item to add it. 18% GST (9% CGST + 9% SGST) is calculated automatically.
-                  </p>
-                </div>
-                <div className="flex items-center rounded-xl border border-gray-200 bg-[#f8f9fb] px-3.5 py-2 sm:w-72">
-                  <Search size={16} className="text-gray-400 mr-2" />
-                  <input
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search item or SKU..."
-                    className="bg-transparent text-sm outline-none w-full text-gray-800"
-                  />
-                </div>
-              </div>
-
-              {availableItems.length === 0 ? (
-                <div className="py-10 text-center border border-dashed border-gray-200 rounded-xl space-y-2">
-                  <p className="text-sm text-gray-500 font-medium">
-                    Your database has no items yet.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setShowAddItemModal(true)}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold cursor-pointer"
-                  >
-                    <PlusCircle size={14} /> Add Your First Item to DB
-                  </button>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 max-h-60 overflow-y-auto pr-1">
-                  {availableItems.map((item) => {
-                    const inCart = Number(cart.find((c) => c.id === item.id)?.qty) || 0;
-                    const remaining = item.stock - inCart;
-                    const isOut = remaining <= 0;
-                    const baseAmt = Number(item.price) || 0;
-                    const autoGst = baseAmt * 0.18;
-
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        disabled={isOut}
-                        onClick={() => addToCart(item)}
-                        className={`flex flex-col justify-between p-3.5 rounded-xl border text-left transition-all ${
-                          isOut
-                            ? 'border-gray-100 bg-gray-50 opacity-50 cursor-not-allowed'
-                            : 'border-gray-200/80 hover:border-indigo-500 hover:bg-indigo-50/20 bg-white cursor-pointer'
-                        }`}
-                      >
-                        <div>
-                          <div className="flex justify-between items-start gap-2">
-                            <p className="text-sm font-semibold text-gray-900 line-clamp-1">
-                              {item.name}
-                            </p>
-                            <span className="text-xs font-bold text-indigo-600 shrink-0">
-                              ₹{baseAmt}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-gray-500 mt-0.5">
-                            + 18% GST (₹{autoGst.toFixed(2)}) ={' '}
-                            <strong>₹{(baseAmt + autoGst).toFixed(2)}</strong>
-                          </p>
-                        </div>
-                        <div className="mt-3 flex items-center justify-between text-xs">
-                          <span
-                            className={
-                              remaining <= item.minStock
-                                ? 'text-red-500 font-medium'
-                                : 'text-emerald-600 font-medium'
-                            }
-                          >
-                            {remaining} left
-                          </span>
-                          {inCart > 0 && (
-                            <span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-md font-semibold text-[11px]">
-                              {inCart} in bill
-                            </span>
-                          )}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
-
             {/* Current Bill Items Table with Exact Requested Columns */}
             <section className="bg-white rounded-2xl border border-gray-100 shadow-[0_2px_12px_rgba(0,0,0,0.04)] overflow-hidden">
               <div className="p-6 border-b border-gray-100 flex justify-between items-center">
@@ -1119,29 +1343,31 @@ export default function BillingPOS({
                     <tr className="bg-gray-50 border-b border-gray-100 text-xs uppercase text-gray-500">
                       <th className="p-3.5">Name of the product</th>
                       <th className="p-3.5 text-center">Qty</th>
-                      <th className="p-3.5 text-right">Amount of the product</th>
-                      <th className="p-3.5 text-right">SGST (9%)</th>
-                      <th className="p-3.5 text-right">CGST (9%)</th>
-                      <th className="p-3.5 text-right">Amount + GST</th>
+                      <th className="p-3.5 text-right">Price (Incl. GST)</th>
+                      <th className="p-3.5 text-right">SGST</th>
+                      <th className="p-3.5 text-right">CGST</th>
+                      <th className="p-3.5 text-right">Final Amount</th>
                       <th className="p-3.5 text-right">Remove</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100 text-sm">
                     {cart.map((item) => {
                       const maxStock = items.find((i) => i.id === item.id)?.stock || item.stock;
+                      const hasLinkedItems = item.linkedMaterials?.length > 0;
                       const numericQty = Number(item.qty) || 0;
-                      const productAmount = (Number(item.price) || 0) * numericQty;
-                      const gstAmount = productAmount * 0.18;
-                      const cgstAmount = productAmount * 0.09;
-                      const sgstAmount = productAmount * 0.09;
-                      const amountPlusGst = productAmount + gstAmount;
+                      const amountPlusGst = (Number(item.price) || 0) * numericQty;
+                      const itemGstRate = Number(item.gstRate ?? 18);
+                      const taxableAmount = amountPlusGst / (1 + itemGstRate / 100);
+                      const gstAmount = amountPlusGst - taxableAmount;
+                      const cgstAmount = gstAmount / 2;
+                      const sgstAmount = gstAmount / 2;
 
                       return (
                         <tr key={item.id}>
                           <td className="p-3.5">
                             <p className="font-medium text-gray-900">{item.name}</p>
                             <p className="text-xs text-gray-400">
-                              Rate: ₹{item.price} • Max: {maxStock}
+                              Rate incl. GST: ₹{Number(item.price).toFixed(2)}{hasLinkedItems ? ' • Linked stock checked at checkout' : ` • Max: ${maxStock}`}
                             </p>
                           </td>
                           <td className="p-3.5">
@@ -1156,7 +1382,7 @@ export default function BillingPOS({
                               <input
                                 type="number"
                                 min="1"
-                                max={maxStock}
+                                max={hasLinkedItems ? undefined : maxStock}
                                 value={item.qty}
                                 onChange={(e) => setDirectQty(item.id, e.target.value)}
                                 onBlur={() => handleQtyBlur(item.id)}
@@ -1171,8 +1397,17 @@ export default function BillingPOS({
                               </button>
                             </div>
                           </td>
-                          <td className="p-3.5 text-right font-semibold text-gray-800">
-                            ₹{productAmount.toFixed(2)}
+                          <td className="p-3.5 text-right">
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={item.price}
+                              onChange={(e) => setItemPrice(item.id, e.target.value)}
+                              onBlur={() => handlePriceBlur(item.id)}
+                              className="w-28 rounded-lg border border-gray-300 px-2 py-1 text-right font-semibold text-gray-800 outline-none focus:border-indigo-600"
+                              aria-label={`Price for ${item.name}`}
+                            />
                           </td>
                           <td className="p-3.5 text-right font-medium text-indigo-700">
                             ₹{sgstAmount.toFixed(2)}
@@ -1205,16 +1440,128 @@ export default function BillingPOS({
                 )}
               </div>
             </section>
+
+            <section className="bg-white rounded-2xl border border-gray-100 p-6 shadow-[0_2px_12px_rgba(0,0,0,0.04)]">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+                <div>
+                  <h3 className="text-base font-semibold text-gray-900">Select Items for Billing</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Click an item to add it. Prices shown include the selected GST rate.
+                  </p>
+                </div>
+                <div className="flex items-center rounded-xl border border-gray-200 bg-[#f8f9fb] px-3.5 py-2 sm:w-72">
+                  <Search size={16} className="text-gray-400 mr-2" />
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search item or SKU..."
+                    className="bg-transparent text-sm outline-none w-full text-gray-800"
+                  />
+                </div>
+              </div>
+
+              {availableItems.length === 0 ? (
+                <div className="py-10 text-center border border-dashed border-gray-200 rounded-xl">
+                  <p className="text-sm text-gray-500 font-medium">
+                    Your inventory has no items yet.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 max-h-80 overflow-y-auto pr-1">
+                  {availableItems.map((item) => {
+                    const inCart = Number(cart.find((c) => c.id === item.id)?.qty) || 0;
+                    const hasLinkedItems = item.linkedMaterials?.length > 0;
+                    const stockTracked = item.stockTracked !== false && item.stockTracked !== 0;
+                    const remaining = item.stock - inCart;
+                    const isOut = stockTracked && !hasLinkedItems && remaining <= 0;
+                    const finalAmt = Number(item.price) || 0;
+                    const itemGstRate = Number(item.gstRate ?? 18);
+                    const includedGst = finalAmt - finalAmt / (1 + itemGstRate / 100);
+
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        disabled={isOut}
+                        onClick={() => addToCart(item)}
+                        className={`flex flex-col justify-between p-3.5 rounded-xl border text-left transition-all ${
+                          isOut
+                            ? 'border-gray-100 bg-gray-50 opacity-50 cursor-not-allowed'
+                            : 'border-gray-200/80 hover:border-indigo-500 hover:bg-indigo-50/20 bg-white cursor-pointer'
+                        }`}
+                      >
+                        <div>
+                          <div className="flex justify-between items-start gap-2">
+                            <p className="text-sm font-semibold text-gray-900 line-clamp-1">
+                              {item.name}
+                            </p>
+                            <span className="text-xs font-bold text-indigo-600 shrink-0">
+                              ₹{finalAmt.toFixed(2)}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-gray-500 mt-0.5">
+                            Includes GST (₹{includedGst.toFixed(2)})
+                          </p>
+                        </div>
+                        <div className="mt-3 flex items-center justify-between text-xs">
+                          <span
+                            className={
+                              remaining <= item.minStock
+                                ? 'text-red-500 font-medium'
+                                : 'text-emerald-600 font-medium'
+                            }
+                          >
+                            {hasLinkedItems
+                              ? 'Linked stock validated at checkout'
+                              : !stockTracked
+                                ? ''
+                                : item.stock > 0 && remaining > 0
+                                ? `${remaining} left`
+                                : 'Out of stock'}
+                          </span>
+                          {inCart > 0 && (
+                            <span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-md font-semibold text-[11px]">
+                              {inCart} in bill
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+
           </div>
 
           {/* RIGHT COLUMN: CUSTOMER AUTOCOMPLETE & EXACT AMOUNTS BOX */}
-          <div className="space-y-6">
+          <div className="space-y-6 lg:sticky lg:top-6 self-start">
             <form
-              onSubmit={handleOpenPreview}
+              onSubmit={async (event) => {
+                event.preventDefault();
+                if (cart.length === 0) {
+                  setValidationMessage('Please add at least one item before choosing a bill type.');
+                  return;
+                }
+                if (!customerName.trim()) {
+                  setValidationMessage('Please enter the customer name before proceeding.');
+                  return;
+                }
+                if (!selectedCustomerId) {
+                  setValidationMessage('Please select or save the customer details before proceeding.');
+                  return;
+                }
+                if (sendWhatsAppToggle && !(await checkWhatsAppConnection())) {
+                  return;
+                }
+                setShowBillTypeModal(true);
+              }}
               className="bg-white rounded-2xl border border-gray-100 p-6 shadow-[0_2px_12px_rgba(0,0,0,0.04)] space-y-5"
             >
               <div>
-                <h3 className="text-base font-semibold text-gray-900">Customer & Bill Summary</h3>
+                <h3 className="flex items-center gap-2 text-base font-semibold text-gray-900">
+                  <Receipt size={18} className="text-indigo-600" /> Customer & Bill Summary
+                </h3>
                 <p className="text-xs text-gray-400 mt-0.5">
                   Search customer by name/place or add a new customer
                 </p>
@@ -1231,6 +1578,7 @@ export default function BillingPOS({
                         value={customerName}
                         onFocus={() => setShowCustomerDropdown(true)}
                         onChange={(e) => {
+                          setSelectedCustomerId(null);
                           setCustomerName(e.target.value);
                           setShowCustomerDropdown(true);
                         }}
@@ -1311,8 +1659,19 @@ export default function BillingPOS({
                         value={customerPlace}
                         onChange={(e) => setCustomerPlace(e.target.value)}
                         placeholder="e.g. kvp"
-                        className="w-full text-sm outline-none bg-transparent text-gray-800 font-normal"
+                        className="w-full text-sm outline-none bg-transparent text-gray-800 font-normal disabled:text-gray-400 disabled:cursor-not-allowed"
                       />
+                      {selectedCustomerId && (
+                        <button
+                          type="button"
+                          onClick={handleSaveSelectedCustomerPlace}
+                          disabled={savingCustomerPlace}
+                          title="Save place to customer"
+                          className="ml-1 shrink-0 text-indigo-600 hover:text-indigo-700 disabled:text-gray-300 cursor-pointer"
+                        >
+                          <Save size={15} />
+                        </button>
+                      )}
                     </div>
                   </label>
 
@@ -1323,9 +1682,10 @@ export default function BillingPOS({
                       <input
                         type="tel"
                         value={customerPhone}
+                        disabled={Boolean(selectedCustomerId)}
                         onChange={(e) => setCustomerPhone(e.target.value)}
                         placeholder="9876543210"
-                        className="w-full text-sm outline-none bg-transparent text-gray-800 font-normal"
+                        className="w-full text-sm outline-none bg-transparent text-gray-800 font-normal disabled:text-gray-400 disabled:cursor-not-allowed"
                       />
                     </div>
                   </label>
@@ -1347,21 +1707,21 @@ export default function BillingPOS({
               {/* Exact Requested 4-Row Amounts Box */}
               <div className="bg-[#f8f9fa] rounded-xl p-4 space-y-2.5 text-sm border border-gray-200">
                 <div className="flex justify-between text-gray-700">
-                  <span>Total amount of the items =</span>
+                  <span>Taxable amount of the items =</span>
                   <span className="font-semibold text-gray-900">
                     ₹{totalAmountOfItems.toFixed(2)}
                   </span>
                 </div>
                 <div className="flex justify-between text-indigo-700 text-xs font-medium">
-                  <span>Total CGST of the bill (9%) =</span>
+                  <span>Total CGST of the bill =</span>
                   <span>₹{totalCgst.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between text-indigo-700 text-xs font-medium">
-                  <span>Total SGST of the bill (9%) =</span>
+                  <span>Total SGST of the bill =</span>
                   <span>₹{totalSgst.toFixed(2)}</span>
                 </div>
                 <div className="border-t border-gray-300 pt-2.5 flex justify-between text-base font-bold text-gray-900">
-                  <span>Total amount + GST =</span>
+                  <span>Final amount (GST included) </span>
                   <span className="text-indigo-600">₹{totalAmountPlusGst.toFixed(2)}</span>
                 </div>
               </div>
@@ -1372,7 +1732,7 @@ export default function BillingPOS({
                 className="w-full flex items-center justify-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 text-white py-3 px-4 text-sm font-semibold transition-colors shadow-sm cursor-pointer"
               >
                 <Eye size={18} />
-                Preview Estimate
+                Choose Sale Bill or Estimate
               </button>
             </form>
 
@@ -1383,7 +1743,7 @@ export default function BillingPOS({
                   <div className="text-xs text-emerald-800">
                     <p className="font-semibold">Last Estimate: #{lastBill.invoiceNo}</p>
                     <p className="mt-0.5">
-                      Total amount + GST = ₹{Number(lastBill.grandTotal).toFixed(2)}
+                      Final amount (GST included) = ₹{Number(lastBill.grandTotal).toFixed(2)}
                     </p>
                   </div>
                 </div>
@@ -1401,6 +1761,7 @@ export default function BillingPOS({
             )}
           </div>
         </div>
+        )
       )}
 
       {/* WHATSAPP QR MODAL */}
@@ -1448,7 +1809,93 @@ export default function BillingPOS({
         </div>
       )}
 
-      {/* ESTIMATE PREVIEW MODAL (Matches Exact Requested Columns & Amounts Box) */}
+      {showBillTypeModal && (
+        <div
+          onClick={() => setShowBillTypeModal(false)}
+          className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 print:hidden"
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl border border-gray-200"
+          >
+            <h3 className="text-base font-bold text-gray-900">Choose bill type</h3>
+            <p className="mt-1 text-xs text-gray-500">Select the document you want to create.</p>
+            <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => handleChooseBillType('Sale')}
+                className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-left hover:bg-emerald-100 cursor-pointer"
+              >
+                <p className="font-bold text-emerald-800">Sale Bill</p>
+                <p className="mt-1 text-xs text-emerald-700">Create a final sale invoice.</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleChooseBillType('Estimate')}
+                className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-left hover:bg-indigo-100 cursor-pointer"
+              >
+                <p className="font-bold text-indigo-800">Estimate Bill</p>
+                <p className="mt-1 text-xs text-indigo-700">Create an estimate for the customer.</p>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCompletionModal && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4 print:hidden">
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-2xl"
+          >
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
+              <CheckCircle2 size={26} />
+            </div>
+            <h3 className="mt-4 text-base font-bold text-gray-900">Bill completed successfully</h3>
+            <p className="mt-1 text-sm text-gray-500">
+              The bill was sent, archived, and saved successfully.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setShowCompletionModal(false);
+                setPreviewBill(null);
+                setIsBillConfirmed(false);
+                setWhatsAppStatus('');
+              }}
+              className="mt-5 w-full rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 cursor-pointer"
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      )}
+
+      {validationMessage && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4 print:hidden">
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            className="w-full max-w-sm rounded-2xl bg-white p-6 text-center shadow-2xl"
+          >
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600">
+              <AlertTriangle size={26} />
+            </div>
+            <h3 className="mt-4 text-base font-bold text-gray-900">Cannot proceed</h3>
+            <p className="mt-1 text-sm text-gray-500">{validationMessage}</p>
+            <button
+              type="button"
+              onClick={() => setValidationMessage('')}
+              className="mt-5 w-full rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 cursor-pointer"
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* BILL PREVIEW MODAL */}
       {previewBill && (
         <div
           onClick={() => !isProcessing && setPreviewBill(null)}
@@ -1463,12 +1910,13 @@ export default function BillingPOS({
                 <FileCheck2 size={20} className="text-indigo-600" />
                 <div>
                   <h3 className="text-sm font-bold text-gray-900">
-                    Estimate Preview (#{previewBill.invoiceNo})
+                    {previewBill.documentType === 'Sale' ? 'Sale Bill' : 'Estimate Bill'} Preview (#
+                    {previewBill.invoiceNo})
                   </h3>
                   <p className="text-xs text-gray-500">
                     {isBillConfirmed
-                      ? 'Confirmed! Saved in DB and added to Customer Pending Actions.'
-                      : 'Review 18% GST split below before confirming.'}
+                      ? `Confirmed! ${previewBill.documentType === 'Sale' ? 'Sale bill' : 'Estimate'} saved in DB and added to Customer Pending Actions.`
+                      : 'Review the GST included in the item prices before confirming.'}
                   </p>
                 </div>
               </div>
@@ -1481,7 +1929,7 @@ export default function BillingPOS({
               </button>
             </div>
 
-            {whatsAppStatus && (
+            {whatsAppStatus && !whatsAppStatus.startsWith('success:') && (
               <div
                 className={`px-6 py-3 text-xs font-semibold flex items-center justify-between print:hidden ${
                   whatsAppStatus.startsWith('error:')
@@ -1520,7 +1968,9 @@ export default function BillingPOS({
                   />
                 </div>
                 <div className="text-center pt-2">
-                  <h1 className="text-lg font-bold tracking-wide">Estimate</h1>
+                  <h1 className="text-lg font-bold tracking-wide">
+                    {previewBill.documentType === 'Sale' ? 'Sale Bill' : 'Estimate Bill'}
+                  </h1>
                 </div>
                 <div className="text-right space-y-0.5">
                   <h2 className="text-base font-extrabold text-gray-900">{storeName}</h2>
@@ -1535,7 +1985,7 @@ export default function BillingPOS({
               <div className="grid grid-cols-2 border border-black">
                 <div className="border-r border-black">
                   <div className="bg-gray-200 border-b border-black px-2.5 py-1 font-bold">
-                    Estimate For
+                    {previewBill.documentType === 'Sale' ? 'Sale Bill For' : 'Estimate Bill For'}
                   </div>
                   <div className="p-2.5 space-y-0.5 bg-white text-gray-900">
                     <p className="font-bold text-sm">{previewBill.customerName}</p>
@@ -1549,11 +1999,12 @@ export default function BillingPOS({
                 </div>
                 <div>
                   <div className="bg-gray-200 border-b border-black px-2.5 py-1 font-bold text-right">
-                    Estimate Details
+                    {previewBill.documentType === 'Sale' ? 'Sale Bill Details' : 'Estimate Bill Details'}
                   </div>
                   <div className="p-2.5 space-y-1 text-right">
                     <p>
-                      Estimate No. : <strong>{previewBill.invoiceNo}</strong>
+                      {previewBill.documentType === 'Sale' ? 'Sale Bill No.' : 'Estimate Bill No.'} :{' '}
+                      <strong>{previewBill.invoiceNo}</strong>
                     </p>
                     <p>
                       Date : <strong>{previewBill.date}</strong>
@@ -1562,7 +2013,7 @@ export default function BillingPOS({
                 </div>
               </div>
 
-              {/* Invoice table with the GST split into 9% SGST and 9% CGST. */}
+              {/* Price includes GST; the GST split is shown only in the summary below. */}
               <table className="w-full border-collapse border border-black text-xs">
                 <thead>
                   <tr className="bg-gray-500 text-white font-bold">
@@ -1570,24 +2021,20 @@ export default function BillingPOS({
                     <th className="border border-black p-1.5 text-left">Name of the product</th>
                     <th className="border border-black p-1.5 w-16 text-center">Qty</th>
                     <th className="border border-black p-1.5 w-32 text-right">
-                      Amount of the product
+                      {previewBill.documentType === 'Sale' ? 'Price (Incl. GST)' : 'Price'}
                     </th>
-                    <th className="border border-black p-1.5 w-24 text-right">SGST (9%)</th>
-                    <th className="border border-black p-1.5 w-24 text-right">CGST (9%)</th>
-                    <th className="border border-black p-1.5 w-32 text-right">Amount + GST</th>
+                    <th className="border border-black p-1.5 w-32 text-right">Final Amount</th>
                   </tr>
                 </thead>
                 <tbody>
                   {previewBill.items.map((item, idx) => {
                     const qty = Number(item.qty || 1);
-                    const productAmt = Number(item.price || 0) * qty;
-                    const gstAmt = productAmt * 0.18;
-                    const sgstAmt = productAmt * 0.09;
-                    const cgstAmt = productAmt * 0.09;
-                    const totalWithGst = productAmt + gstAmt;
+                    const unitPrice = Number(item.price || 0);
+                    const productAmt = unitPrice * qty;
+                    const totalWithGst = productAmt;
 
                     return (
-                      <tr key={item.id || idx}>
+                      <tr key={`${item.id || 'item'}-${idx}`}>
                         <td className="border-x border-b border-gray-300 p-1.5">{idx + 1}</td>
                         <td className="border-x border-b border-gray-300 p-1.5 font-bold">
                           {item.name}
@@ -1596,16 +2043,10 @@ export default function BillingPOS({
                           {qty}
                         </td>
                         <td className="border-x border-b border-gray-300 p-1.5 text-right">
-                          ₹ {productAmt.toFixed(2)}
-                        </td>
-                        <td className="border-x border-b border-gray-300 p-1.5 text-right">
-                          ₹ {sgstAmt.toFixed(2)}
-                        </td>
-                        <td className="border-x border-b border-gray-300 p-1.5 text-right">
-                          ₹ {cgstAmt.toFixed(2)}
+                          ₹ {unitPrice.toFixed(2)}
                         </td>
                         <td className="border-x border-b border-gray-300 p-1.5 text-right font-semibold">
-                          ₹ {totalWithGst.toFixed(2)}
+                          {item.displayOnly ? 'Included' : `₹ ${totalWithGst.toFixed(2)}`}
                         </td>
                       </tr>
                     );
@@ -1614,17 +2055,11 @@ export default function BillingPOS({
                     <td className="border border-black p-1.5"></td>
                     <td className="border border-black p-1.5">Total</td>
                     <td className="border border-black p-1.5 text-center">
-                      {previewBill.items.reduce((s, i) => s + Number(i.qty || 0), 0)}
+                      {previewBill.items
+                        .filter((i) => !i.displayOnly)
+                        .reduce((s, i) => s + Number(i.qty || 0), 0)}
                     </td>
-                    <td className="border border-black p-1.5 text-right">
-                      ₹ {Number(previewBill.subtotal).toFixed(2)}
-                    </td>
-                    <td className="border border-black p-1.5 text-right">
-                      ₹ {Number(previewBill.sgst).toFixed(2)}
-                    </td>
-                    <td className="border border-black p-1.5 text-right">
-                      ₹ {Number(previewBill.cgst).toFixed(2)}
-                    </td>
+                    <td className="border border-black p-1.5 text-right">-</td>
                     <td className="border border-black p-1.5 text-right">
                       ₹ {Number(previewBill.grandTotal).toFixed(2)}
                     </td>
@@ -1635,39 +2070,43 @@ export default function BillingPOS({
               <div className="grid grid-cols-12 border border-black">
                 <div className="col-span-6 border-r border-b border-black">
                   <div className="bg-gray-500 text-white px-2.5 py-1 font-bold border-b border-black">
-                    Estimate Amount In Words
+                    {previewBill.documentType === 'Sale' ? 'GST Details' : 'Estimate Amount In Words'}
                   </div>
-                  <div className="p-2.5 font-medium">
-                    {amountToIndianWords(previewBill.grandTotal)}
-                  </div>
+                  {previewBill.documentType === 'Sale' ? (
+                    <div className="divide-y divide-black">
+                      <div className="flex justify-between px-2.5 py-1.5 text-indigo-900">
+                        <span>CGST (9%) =</span>
+                        <span className="font-medium">₹ {Number(previewBill.cgst).toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between px-2.5 py-1.5 text-indigo-900">
+                        <span>SGST (9%) =</span>
+                        <span className="font-medium">₹ {Number(previewBill.sgst).toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between px-2.5 py-1.5 font-bold text-indigo-900">
+                        <span>GST (18%) =</span>
+                        <span>₹ {(Number(previewBill.cgst) + Number(previewBill.sgst)).toFixed(2)}</span>
+                      </div>
+                      <div className="px-2.5 py-2 bg-gray-50">
+                        <div className="text-[9px] font-bold uppercase tracking-wide text-gray-700">
+                          Amount in words
+                        </div>
+                        <div className="mt-1 text-[10px] font-medium text-gray-900 leading-snug">
+                          {amountToIndianWords(previewBill.grandTotal)}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-2.5 font-medium">{amountToIndianWords(previewBill.grandTotal)}</div>
+                  )}
                 </div>
 
-                {/* Exact Requested Amounts Box */}
                 <div className="col-span-6 border-b border-black">
                   <div className="bg-gray-500 text-white px-2.5 py-1 font-bold border-b border-black">
                     Amounts
                   </div>
                   <div className="divide-y divide-black">
-                    <div className="flex justify-between px-2.5 py-1.5">
-                      <span>Total amount of the items =</span>
-                      <span className="font-semibold">
-                        ₹ {Number(previewBill.subtotal).toFixed(2)}
-                      </span>
-                    </div>
-                    <div className="flex justify-between px-2.5 py-1.5 text-indigo-900">
-                      <span>Total CGST of the bill (9%) =</span>
-                      <span className="font-medium">
-                        ₹ {Number(previewBill.cgst).toFixed(2)}
-                      </span>
-                    </div>
-                    <div className="flex justify-between px-2.5 py-1.5 text-indigo-900">
-                      <span>Total SGST of the bill (9%) =</span>
-                      <span className="font-medium">
-                        ₹ {Number(previewBill.sgst).toFixed(2)}
-                      </span>
-                    </div>
                     <div className="flex justify-between px-2.5 py-1.5 font-bold text-sm bg-gray-100">
-                      <span>Total amount + GST =</span>
+                      <span>Final amount =</span>
                       <span>₹ {Number(previewBill.grandTotal).toFixed(2)}</span>
                     </div>
                   </div>
@@ -1696,7 +2135,11 @@ export default function BillingPOS({
                   <div className="bg-gray-500 text-white px-2.5 py-1 font-bold border-b border-black">
                     Terms and Conditions
                   </div>
-                  <div className="p-2.5 text-[11px]">Thanks for doing business with us!</div>
+                  <ol className="p-2.5 pl-7 text-[9px] list-decimal space-y-1 leading-tight">
+                    <li>Prices include applicable GST unless stated otherwise.</li>
+                    <li>Verify product details, quantity, spelling, photographs, and layout before approval/printing.</li>
+                    <li>Confirmed orders are non-refundable once production begins; any balance is payable before delivery.</li>
+                  </ol>
                 </div>
 
                 <div className="col-span-3 flex flex-col justify-between p-2.5 text-center">
@@ -1716,11 +2159,24 @@ export default function BillingPOS({
                 {isBillConfirmed ? 'Close Window' : '← Back & Edit Bill'}
               </button>
 
+              {!isBillConfirmed && sendWhatsAppToggle && !waState.connected && (
+                <p className="text-xs font-medium text-amber-700">
+                  Link WhatsApp to enable bill confirmation.
+                </p>
+              )}
               <button
                 type="button"
-                disabled={isProcessing}
+                disabled={
+                  isProcessing ||
+                  (!isBillConfirmed && sendWhatsAppToggle && !waState.connected)
+                }
+                title={
+                  !isBillConfirmed && sendWhatsAppToggle && !waState.connected
+                    ? 'Link WhatsApp to enable bill confirmation.'
+                    : undefined
+                }
                 onClick={handleConfirmPrintAndSend}
-                className="flex items-center gap-2 px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white text-xs font-bold transition-colors shadow-sm cursor-pointer"
+                className="flex items-center gap-2 px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 disabled:hover:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed text-white text-xs font-bold transition-colors shadow-sm cursor-pointer"
               >
                 <Printer size={16} />
                 {isProcessing

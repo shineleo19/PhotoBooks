@@ -18,6 +18,8 @@ import {
   X,
 } from 'lucide-react';
 
+const tracksStock = (item) => item.stockTracked !== false && item.stockTracked !== 0;
+
 function MetricCard({ label, value, detail, icon: Icon, tone }) {
   const tones = {
     indigo: 'bg-indigo-50 text-indigo-600',
@@ -63,7 +65,9 @@ export default function Dashboard({
   const sgstCollected = sales.reduce((sum, sale) => sum + (sale.sgst || 0), 0);
   const totalGst = cgstCollected + sgstCollected;
 
-  const lowStockAlerts = items.filter((item) => item.stock <= item.minStock);
+  const lowStockAlerts = items.filter(
+    (item) => tracksStock(item) && item.stock <= item.minStock
+  );
   const recentSales = sales.slice(0, 3);
 
   const currentYear = new Date().getFullYear();
@@ -133,7 +137,9 @@ export default function Dashboard({
         <section className={`lg:col-span-2 ${cardStyle}`}>
           <div className="mb-5 flex items-center justify-between border-b border-gray-50 pb-4">
             <div>
-              <h3 className="font-semibold text-gray-900">Today's GST Invoices</h3>
+              <h3 className="flex items-center gap-2 font-semibold text-gray-900">
+                <ReceiptText size={18} className="text-indigo-600" /> Today&apos;s GST Invoices
+              </h3>
               <p className="mt-1 text-xs text-gray-400">Recent transactions processed today</p>
             </div>
             <button
@@ -179,7 +185,9 @@ export default function Dashboard({
         <section className={cardStyle}>
           <div className="mb-5 flex items-center justify-between border-b border-gray-50 pb-4">
             <div>
-              <h3 className="font-semibold text-gray-900">Pending Restock</h3>
+              <h3 className="flex items-center gap-2 font-semibold text-gray-900">
+                <TrendingUp size={18} className="text-red-500" /> Pending Restock
+              </h3>
               <p className="mt-1 text-xs text-gray-400">Raw materials below minimum levels</p>
             </div>
             <button
@@ -209,7 +217,7 @@ export default function Dashboard({
                   <div>
                     <p className="text-sm font-medium text-gray-900 line-clamp-1">{item.name}</p>
                     <p className="text-xs text-red-500 mt-0.5 font-medium">
-                      {item.stock} units remaining (Min: {item.minStock})
+                      {item.stock} {item.baseUnit || 'Pieces'} remaining (Min: {item.minStock})
                     </p>
                   </div>
                 </div>
@@ -224,7 +232,9 @@ export default function Dashboard({
         <section className={cardStyle}>
           <div className="mb-5 flex items-center justify-between border-b border-gray-50 pb-4">
             <div>
-              <h3 className="font-semibold text-gray-900">Studio Material Breakdown</h3>
+              <h3 className="flex items-center gap-2 font-semibold text-gray-900">
+                <BookOpen size={18} className="text-indigo-600" /> Studio Material Breakdown
+              </h3>
               <p className="mt-1 text-xs text-gray-400">Active raw material categories</p>
             </div>
             <button
@@ -245,7 +255,9 @@ export default function Dashboard({
         <section className={`${cardStyle} flex flex-col justify-between`}>
           <div className="mb-5 flex items-center justify-between border-b border-gray-50 pb-4">
             <div>
-              <h3 className="font-semibold text-gray-900">Database & Cloud Sync</h3>
+              <h3 className="flex items-center gap-2 font-semibold text-gray-900">
+                <ShieldCheck size={18} className="text-emerald-600" /> Database & Cloud Sync
+              </h3>
               <p className="mt-1 text-xs text-gray-400">SQLite to Supabase status</p>
             </div>
             <span className="text-sm font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md">
@@ -268,12 +280,6 @@ export default function Dashboard({
             <h3 className="font-semibold text-gray-900">Store & System Environment</h3>
             <p className="mt-1 text-xs text-gray-400">Active terminal and connection details</p>
           </div>
-          <button
-            onClick={() => openPage('Warehouse', 'Warehouse')}
-            className="text-xs font-medium text-indigo-600 hover:underline cursor-pointer"
-          >
-            Details →
-          </button>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-[#f8f9fa] border border-gray-50 rounded-xl p-5 min-h-[92px] flex flex-col justify-between">

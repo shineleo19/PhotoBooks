@@ -10,11 +10,11 @@ import {
   ClockAlert,
   Package,
   FileText,
-  Warehouse,
   ChevronDown,
   PanelLeft,
   FilePlus2,
   History,
+  Users,
 } from 'lucide-react';
 
 export default function Sidebar({
@@ -75,7 +75,7 @@ export default function Sidebar({
             className={`w-full flex items-center ${
               isExpanded ? 'justify-between px-3 py-2.5' : 'justify-center h-11 w-11 mx-auto'
             } rounded-xl text-[15px] font-semibold transition-colors ${
-              ['Dashboard', 'TodaySales', 'PendingActions'].includes(activeTab)
+              ['Dashboard', 'TodaySales', 'PendingActions', 'CustomerBalances'].includes(activeTab)
                 ? 'bg-[#e0e7ff] text-indigo-600'
                 : 'text-gray-800 hover:bg-gray-50'
             }`}
@@ -131,6 +131,18 @@ export default function Sidebar({
               >
                 <ClockAlert size={17} />
                 <span>Pending Amount & Actions</span>
+              </button>
+
+              <button
+                onClick={() => openPage('CustomerBalances', 'Customer Balances')}
+                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+                  activeTab === 'CustomerBalances'
+                    ? 'bg-[#eef2ff] text-indigo-600'
+                    : 'text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <Users size={17} />
+                <span>Customer Balances</span>
               </button>
             </div>
           )}
@@ -270,22 +282,6 @@ export default function Sidebar({
           )}
         </div>
 
-        {/* Warehouse */}
-        <button
-          onClick={() => openPage('Warehouse', 'Warehouse')}
-          className={`w-full flex items-center ${
-            isExpanded ? 'justify-between px-3 py-3' : 'justify-center h-11 w-11 mx-auto'
-          } rounded-xl text-sm font-medium transition-colors ${
-            activeTab === 'Warehouse'
-              ? 'bg-[#eef2ff] text-indigo-600'
-              : 'text-gray-700 hover:bg-gray-50'
-          }`}
-        >
-          <div className="flex items-center gap-3.5">
-            <Warehouse size={20} className="shrink-0 " />
-            {isExpanded && <span>Warehouse</span>}
-          </div>
-        </button>
       </nav>
     </aside>
   );
