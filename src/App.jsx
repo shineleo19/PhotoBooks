@@ -17,9 +17,9 @@ const defaultBusinessInfo = {
   email: 'billing@photobooks.in',
   phone: '8754540404',
   supportPhone: '8754540404',
-  gstin: '33ABEPB960D1Z7',
+  gstin: '33ABEFP8960D1Z7',
   address: '10/1.11/1 Parasakthi building upstairs Madrai road, Tirunelveli junction Tirunelveli',
-  upiId: 'photobooks@icici',
+  upiId: 'eazypay.ntb1100092027@icici',
   terminalId: 'POS-MAIN-01',
 };
 
@@ -71,7 +71,13 @@ export default function App() {
   const [businessInfo, setBusinessInfo] = useState(() => {
     try {
       const saved = localStorage.getItem('businessos_profile_v2');
-      return saved ? JSON.parse(saved) : defaultBusinessInfo;
+      if (!saved) return defaultBusinessInfo;
+      const savedProfile = JSON.parse(saved);
+      const profile = { ...defaultBusinessInfo, ...savedProfile };
+      if (String(profile.upiId || '').trim().toLowerCase() === 'photobooks@icici') {
+        profile.upiId = defaultBusinessInfo.upiId;
+      }
+      return profile;
     } catch {
       return defaultBusinessInfo;
     }

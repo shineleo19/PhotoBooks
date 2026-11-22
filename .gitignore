@@ -43,3 +43,6 @@ auth_info_baileys/
 .agents/
 .claude/
 .windsurf/
+
+
+/public/signature1.png

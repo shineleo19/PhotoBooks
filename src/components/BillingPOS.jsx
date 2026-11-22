@@ -1,5 +1,6 @@
 // src/components/BillingPOS.jsx
 import { useState, useMemo, useEffect, useRef } from 'react';
+import QRCode from 'qrcode';
 import { API_BASE_URL } from '../api';
 import { rankItems } from '../utils/itemSearch';
 import {
@@ -133,15 +134,7 @@ const numberToIndianWords = (value) => {
 };
 
 const amountToIndianWords = (amount) => {
-  const roundedAmount = Math.round((Number(amount) || 0) * 100) / 100;
-  const rupees = Math.floor(Math.abs(roundedAmount));
-  const paise = Math.round((Math.abs(roundedAmount) - rupees) * 100);
-  const prefix = roundedAmount < 0 ? 'Minus ' : '';
-  const rupeeText = `${prefix}${numberToIndianWords(rupees)}`;
-
-  return paise
-    ? `${rupeeText} and ${numberToIndianWords(paise)} Paise Only`
-    : `${rupeeText} Only`;
+  return `${numberToIndianWords(Math.round(Number(amount) || 0))} Rupees only`;
 };
 
 export default function BillingPOS({
@@ -156,12 +149,12 @@ export default function BillingPOS({
   initialSubTab = 'pos',
 }) {
   const storeName = businessInfo.businessName || 'PHOTO BOOKS';
-  const storeGstin = businessInfo.gstin || '33ABEFP8960D1Z7';
+  const storeGstin =  '33ABEFP8960D1Z7';
   const storeAddress =
     businessInfo.address ||
     '10/1.11/1 Parasakthi building upstairs Madrai road, Tirunelveli junction Tirunelveli';
   const storePhone = businessInfo.phone || '8754540404';
-  const storeUpiId = businessInfo.upiId || 'photobooks@icici';
+  const storeUpiId = String(businessInfo.upiId || '').trim() || 'eazypay.ntb1100092027@icici';
   const [savedBillDraft] = useState(loadBillingDraft);
 
   const [subTab, setSubTab] = useState(initialSubTab);
@@ -276,9 +269,33 @@ export default function BillingPOS({
   const [whatsAppStatus, setWhatsAppStatus] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [lastBill, setLastBill] = useState(null);
+  const [upiQr, setUpiQr] = useState({ uri: '', dataUrl: '', error: false });
 
   const [waState, setWaState] = useState({ connected: false, qrDataUrl: null });
   const [showWaQrModal, setShowWaQrModal] = useState(false);
+
+  const upiPaymentUri = previewBill
+    ? `upi://pay?pa=${encodeURIComponent(storeUpiId)}&pn=${encodeURIComponent(storeName)}&am=${Number(previewBill.grandTotal).toFixed(2)}&cu=INR`
+    : '';
+  const isUpiQrReady = upiQr.uri === upiPaymentUri && Boolean(upiQr.dataUrl);
+
+  useEffect(() => {
+    if (!upiPaymentUri) return undefined;
+
+    let cancelled = false;
+    QRCode.toDataURL(upiPaymentUri, { width: 150, margin: 1 })
+      .then((dataUrl) => {
+        if (!cancelled) setUpiQr({ uri: upiPaymentUri, dataUrl, error: false });
+      })
+      .catch((error) => {
+        console.error('UPI QR generation failed:', error);
+        if (!cancelled) setUpiQr({ uri: upiPaymentUri, dataUrl: '', error: true });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [upiPaymentUri]);
 
   useEffect(() => {
     const checkWaStatus = async () => {
@@ -867,12 +884,6 @@ export default function BillingPOS({
     } finally {
       setIsProcessing(false);
     }
-  };
-
-  const generateUpiQrUrl = () => {
-    if (!previewBill) return '';
-    const upiString = `upi://pay?pa=${storeUpiId}&pn=${encodeURIComponent(storeName)}&am=${previewBill.grandTotal.toFixed(2)}&cu=INR`;
-    return `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(upiString)}`;
   };
 
   return (
@@ -1802,7 +1813,7 @@ export default function BillingPOS({
               </div>
             ) : (
               <div className="py-8 text-xs text-gray-500">
-                Generating WhatsApp QR code... Make sure <code>node server/index.js</code> is running.
+                Generating WhatsApp QR code...
               </div>
             )}
           </div>
@@ -1843,7 +1854,7 @@ export default function BillingPOS({
       )}
 
       {showCompletionModal && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4 print:hidden">
+        <div className="fixed inset-0 z-70 flex items-center justify-center bg-black/40 p-4 print:hidden">
           <div
             role="dialog"
             aria-modal="true"
@@ -1873,7 +1884,7 @@ export default function BillingPOS({
       )}
 
       {validationMessage && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4 print:hidden">
+        <div className="fixed inset-0 z-70 flex items-center justify-center bg-black/40 p-4 print:hidden">
           <div
             role="alertdialog"
             aria-modal="true"
@@ -1969,13 +1980,13 @@ export default function BillingPOS({
                 </div>
                 <div className="text-center pt-2">
                   <h1 className="text-lg font-bold tracking-wide">
-                    {previewBill.documentType === 'Sale' ? 'Sale Bill' : 'Estimate Bill'}
+                    {previewBill.documentType === 'Sale' ? 'Invoice' : 'Estimate Invoice'}
                   </h1>
                 </div>
                 <div className="text-right space-y-0.5">
                   <h2 className="text-base font-extrabold text-gray-900">{storeName}</h2>
                   <p className="text-[11px] text-gray-600 leading-tight">{storeAddress}</p>
-                  <p className="text-[11px] font-semibold text-gray-800">Phone no.: {storePhone}</p>
+                  <p className="text-[11px] font-semibold text-gray-800">Phone no: {storePhone}</p>
                   <p className="text-[11px] font-semibold text-gray-800">
                     GSTIN: {storeGstin}, State: 33-Tamil Nadu
                   </p>
@@ -1985,7 +1996,7 @@ export default function BillingPOS({
               <div className="grid grid-cols-2 border border-black">
                 <div className="border-r border-black">
                   <div className="bg-gray-200 border-b border-black px-2.5 py-1 font-bold">
-                    {previewBill.documentType === 'Sale' ? 'Sale Bill For' : 'Estimate Bill For'}
+                    {previewBill.documentType === 'Sale' ? 'Invoice to' : 'Estimate  Invoice to'}
                   </div>
                   <div className="p-2.5 space-y-0.5 bg-white text-gray-900">
                     <p className="font-bold text-sm">{previewBill.customerName}</p>
@@ -2003,7 +2014,7 @@ export default function BillingPOS({
                   </div>
                   <div className="p-2.5 space-y-1 text-right">
                     <p>
-                      {previewBill.documentType === 'Sale' ? 'Sale Bill No.' : 'Estimate Bill No.'} :{' '}
+                      {previewBill.documentType === 'Sale' ? 'Invoice No' : 'Estimate No'} :{' '}
                       <strong>{previewBill.invoiceNo}</strong>
                     </p>
                     <p>
@@ -2013,10 +2024,9 @@ export default function BillingPOS({
                 </div>
               </div>
 
-              {/* Price includes GST; the GST split is shown only in the summary below. */}
               <table className="w-full border-collapse border border-black text-xs">
                 <thead>
-                  <tr className="bg-gray-500 text-white font-bold">
+                  <tr className="bg-gray-500 text-white font-bold print:bg-gray-200 print:text-black">
                     <th className="border border-black p-1.5 w-8 text-left">SL NO</th>
                     <th className="border border-black p-1.5 text-left">Name of the product</th>
                     <th className="border border-black p-1.5 w-16 text-center">Qty</th>
@@ -2035,17 +2045,19 @@ export default function BillingPOS({
 
                     return (
                       <tr key={`${item.id || 'item'}-${idx}`}>
-                        <td className="border-x border-b border-gray-300 p-1.5">{idx + 1}</td>
+                        <td className="border-x border-b border-gray-300 p-1.5 font-bold">
+                          {idx + 1}
+                        </td>
                         <td className="border-x border-b border-gray-300 p-1.5 font-bold">
                           {item.name}
                         </td>
-                        <td className="border-x border-b border-gray-300 p-1.5 text-center">
+                        <td className="border-x border-b border-gray-300 p-1.5 text-center font-bold">
                           {qty}
                         </td>
-                        <td className="border-x border-b border-gray-300 p-1.5 text-right">
+                        <td className="border-x border-b border-gray-300 p-1.5 text-right font-bold">
                           ₹ {unitPrice.toFixed(2)}
                         </td>
-                        <td className="border-x border-b border-gray-300 p-1.5 text-right font-semibold">
+                        <td className="border-x border-b border-gray-300 p-1.5 text-right font-bold">
                           {item.displayOnly ? 'Included' : `₹ ${totalWithGst.toFixed(2)}`}
                         </td>
                       </tr>
@@ -2068,40 +2080,32 @@ export default function BillingPOS({
               </table>
 
               <div className="grid grid-cols-12 border border-black">
-                <div className="col-span-6 border-r border-b border-black">
-                  <div className="bg-gray-500 text-white px-2.5 py-1 font-bold border-b border-black">
-                    {previewBill.documentType === 'Sale' ? 'GST Details' : 'Estimate Amount In Words'}
-                  </div>
-                  {previewBill.documentType === 'Sale' ? (
+                {previewBill.documentType === 'Sale' ? (
+                  <div className="col-span-6 border-r border-b border-black">
+                    <div className="bg-gray-500 text-white px-2.5 py-1 font-bold border-b border-black print:bg-gray-200 print:text-black">
+                      Tax Details
+                    </div>
                     <div className="divide-y divide-black">
-                      <div className="flex justify-between px-2.5 py-1.5 text-indigo-900">
+                      <div className="flex justify-between px-2.5 py-1.5 text-indigo-900 font-bold">
                         <span>CGST (9%) =</span>
-                        <span className="font-medium">₹ {Number(previewBill.cgst).toFixed(2)}</span>
+                        <span>₹ {Number(previewBill.cgst).toFixed(2)}</span>
                       </div>
-                      <div className="flex justify-between px-2.5 py-1.5 text-indigo-900">
+                      <div className="flex justify-between px-2.5 py-1.5 text-indigo-900 font-bold">
                         <span>SGST (9%) =</span>
-                        <span className="font-medium">₹ {Number(previewBill.sgst).toFixed(2)}</span>
+                        <span>₹ {Number(previewBill.sgst).toFixed(2)}</span>
                       </div>
                       <div className="flex justify-between px-2.5 py-1.5 font-bold text-indigo-900">
                         <span>GST (18%) =</span>
                         <span>₹ {(Number(previewBill.cgst) + Number(previewBill.sgst)).toFixed(2)}</span>
                       </div>
-                      <div className="px-2.5 py-2 bg-gray-50">
-                        <div className="text-[9px] font-bold uppercase tracking-wide text-gray-700">
-                          Amount in words
-                        </div>
-                        <div className="mt-1 text-[10px] font-medium text-gray-900 leading-snug">
-                          {amountToIndianWords(previewBill.grandTotal)}
-                        </div>
-                      </div>
                     </div>
-                  ) : (
-                    <div className="p-2.5 font-medium">{amountToIndianWords(previewBill.grandTotal)}</div>
-                  )}
-                </div>
+                  </div>
+                ) : (
+                  <div className="col-span-6 border-r border-b border-black" aria-hidden="true" />
+                )}
 
                 <div className="col-span-6 border-b border-black">
-                  <div className="bg-gray-500 text-white px-2.5 py-1 font-bold border-b border-black">
+                  <div className="bg-gray-500 text-white px-2.5 py-1 font-bold border-b border-black print:bg-gray-200 print:text-black">
                     Amounts
                   </div>
                   <div className="divide-y divide-black">
@@ -2109,20 +2113,36 @@ export default function BillingPOS({
                       <span>Final amount =</span>
                       <span>₹ {Number(previewBill.grandTotal).toFixed(2)}</span>
                     </div>
+                    <div className="divide-y divide-black">
+                      <div className="bg-gray-500 text-white px-2.5 py-1 font-bold border-b border-black print:bg-gray-200 print:text-black">
+                        Invoice Amount In Words
+                      </div>
+                      <div className="flex items-center px-2.5 py-1.5 font-bold text-sm bg-gray-100 leading-snug">
+                        {amountToIndianWords(previewBill.grandTotal)}
+                      </div>
+                    </div>
                   </div>
                 </div>
 
                 <div className="col-span-5 border-r border-black">
-                  <div className="bg-gray-500 text-white px-2.5 py-1 font-bold border-b border-black">
+                  <div className="bg-gray-500 text-white px-2.5 py-1 font-bold border-b border-black print:bg-gray-200 print:text-black">
                     Bank Details
                   </div>
                   <div className="p-2.5 flex items-center gap-3">
-                    <img
-                      src={generateUpiQrUrl()}
-                      alt="UPI QR"
-                      className="w-16 h-16 border border-gray-300 shrink-0"
-                    />
-                    <div className="text-[10px] space-y-0.5 leading-snug">
+                    {isUpiQrReady ? (
+                      <img
+                        src={upiQr.dataUrl}
+                        alt="UPI QR payment for invoice amount"
+                        className="w-16 h-16 border border-gray-300 shrink-0"
+                      />
+                    ) : (
+                      <div className="w-16 shrink-0 text-[9px] text-red-700 print:hidden">
+                        {upiQr.uri === upiPaymentUri && upiQr.error
+                          ? 'Unable to generate UPI QR.'
+                          : 'Generating UPI QR...'}
+                      </div>
+                    )}
+                    <div className="text-[10px] font-bold space-y-0.5 leading-snug">
                       <p>Name : ICICI BANK LIMITED, TIRUNELVELI JUNCTION</p>
                       <p>Account No. : 613505500805</p>
                       <p>IFSC code : ICIC0006135</p>
@@ -2132,10 +2152,10 @@ export default function BillingPOS({
                 </div>
 
                 <div className="col-span-4 border-r border-black">
-                  <div className="bg-gray-500 text-white px-2.5 py-1 font-bold border-b border-black">
+                  <div className="bg-gray-500 text-white px-2.5 py-1 font-bold border-b border-black print:bg-gray-200 print:text-black">
                     Terms and Conditions
                   </div>
-                  <ol className="p-2.5 pl-7 text-[9px] list-decimal space-y-1 leading-tight">
+                  <ol className="p-2.5 pl-7 text-[9px] font-bold list-decimal space-y-1 leading-tight">
                     <li>Prices include applicable GST unless stated otherwise.</li>
                     <li>Verify product details, quantity, spelling, photographs, and layout before approval/printing.</li>
                     <li>Confirmed orders are non-refundable once production begins; any balance is payable before delivery.</li>
@@ -2144,7 +2164,12 @@ export default function BillingPOS({
 
                 <div className="col-span-3 flex flex-col justify-between p-2.5 text-center">
                   <p className="text-[11px]">For : {storeName}</p>
-                  <p className="font-bold text-[11px] pt-10">Authorized Signatory</p>
+                  <img
+                    src="/signature1.png"
+                    alt="Authorized signature"
+                    className="mx-auto h-[42px] w-full max-w-[150px] object-cover object-center"
+                  />
+                  <p className="font-bold text-[11px]">Authorized Signatory</p>
                 </div>
               </div>
             </div>
@@ -2168,12 +2193,15 @@ export default function BillingPOS({
                 type="button"
                 disabled={
                   isProcessing ||
+                  !isUpiQrReady ||
                   (!isBillConfirmed && sendWhatsAppToggle && !waState.connected)
                 }
                 title={
-                  !isBillConfirmed && sendWhatsAppToggle && !waState.connected
-                    ? 'Link WhatsApp to enable bill confirmation.'
-                    : undefined
+                  !isUpiQrReady
+                    ? 'Wait for the UPI payment QR to finish generating.'
+                    : !isBillConfirmed && sendWhatsAppToggle && !waState.connected
+                      ? 'Link WhatsApp to enable bill confirmation.'
+                      : undefined
                 }
                 onClick={handleConfirmPrintAndSend}
                 className="flex items-center gap-2 px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-300 disabled:hover:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed text-white text-xs font-bold transition-colors shadow-sm cursor-pointer"
