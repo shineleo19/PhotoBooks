@@ -39,11 +39,6 @@ function MetricCard({ label, value, detail, icon: Icon, tone }) {
 }
 
 function parseSaleDate(sale) {
-  if (sale.createdAt) {
-    const createdAt = new Date(sale.createdAt);
-    if (!Number.isNaN(createdAt.getTime())) return createdAt;
-  }
-
   const dateText = String(sale.date || '');
   const localizedMatch = dateText.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
   if (localizedMatch) {
@@ -52,12 +47,31 @@ function parseSaleDate(sale) {
     if (!Number.isNaN(localizedDate.getTime())) return localizedDate;
   }
 
-  const parsedDate = new Date(dateText);
-  return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
+  if (dateText) {
+    const parsedDate = new Date(dateText);
+    if (!Number.isNaN(parsedDate.getTime())) return parsedDate;
+  }
+
+  if (sale.createdAt) {
+    const createdAt = new Date(sale.createdAt);
+    if (!Number.isNaN(createdAt.getTime())) return createdAt;
+  }
+
+  return null;
 }
 
 function getLocalDateKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function getLocalMonthKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function formatDateKey(dateKey) {
+  if (!dateKey) return '';
+  const [year, month, day] = dateKey.split('-').map(Number);
+  return new Date(year, month - 1, day).toLocaleDateString('en-IN');
 }
 
 function getVisibleInvoiceItems(items) {
@@ -80,18 +94,22 @@ function getVisibleInvoiceItems(items) {
 
 export default function TodaySales({ sales = [] }) {
   const [selectedSale, setSelectedSale] = useState(null);
-  const [selectedMonth, setSelectedMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [selectedMonth, setSelectedMonth] = useState(() => getLocalMonthKey(new Date()));
   const [selectedCategory, setSelectedCategory] = useState('All categories');
   const [periodView, setPeriodView] = useState('month');
   const [ledgerSearch, setLedgerSearch] = useState('');
   const [todayDateKey, setTodayDateKey] = useState(() => getLocalDateKey(new Date()));
+  const [rangeStartDate, setRangeStartDate] = useState(
+    () => `${getLocalMonthKey(new Date())}-01`
+  );
+  const [rangeEndDate, setRangeEndDate] = useState(() => getLocalDateKey(new Date()));
 
   const availableMonths = useMemo(() => {
     const months = new Set([selectedMonth]);
     sales.forEach((sale) => {
       const parsedDate = parseSaleDate(sale);
       if (parsedDate) {
-        months.add(parsedDate.toISOString().slice(0, 7));
+        months.add(getLocalMonthKey(parsedDate));
       }
     });
     return [...months].sort().reverse();
@@ -102,20 +120,28 @@ export default function TodaySales({ sales = [] }) {
       sales.filter((sale) => {
         const parsedDate = parseSaleDate(sale);
         return parsedDate
-          ? parsedDate.toISOString().slice(0, 7) === selectedMonth
+          ? getLocalMonthKey(parsedDate) === selectedMonth
           : false;
       }),
     [sales, selectedMonth]
   );
 
   const filteredSales = useMemo(() => {
-    if (periodView !== 'today') return monthSales;
+    if (periodView === 'month') return monthSales;
+    if (periodView === 'custom') {
+      if (!rangeStartDate || !rangeEndDate || rangeStartDate > rangeEndDate) return [];
+      return sales.filter((sale) => {
+        const parsedDate = parseSaleDate(sale);
+        const dateKey = parsedDate ? getLocalDateKey(parsedDate) : '';
+        return dateKey >= rangeStartDate && dateKey <= rangeEndDate;
+      });
+    }
 
     return sales.filter((sale) => {
       const parsedDate = parseSaleDate(sale);
       return parsedDate ? getLocalDateKey(parsedDate) === todayDateKey : false;
     });
-  }, [sales, monthSales, periodView, todayDateKey]);
+  }, [sales, monthSales, periodView, todayDateKey, rangeStartDate, rangeEndDate]);
 
   const categoryOptions = useMemo(() => {
     const categories = new Set();
@@ -135,15 +161,6 @@ export default function TodaySales({ sales = [] }) {
       )
     );
   }, [filteredSales, selectedCategory]);
-
-  const monthlyCategorySales = useMemo(() => {
-    if (selectedCategory === 'All categories') return monthSales;
-    return monthSales.filter((sale) =>
-      (Array.isArray(sale.items) ? sale.items : []).some(
-        (item) => (item.category || 'Uncategorized') === selectedCategory
-      )
-    );
-  }, [monthSales, selectedCategory]);
 
   const ledgerSales = useMemo(() => {
     const query = ledgerSearch.trim().toLowerCase();
@@ -247,13 +264,13 @@ export default function TodaySales({ sales = [] }) {
   }, [filteredSales]);
 
   const exportLedgerToCSV = () => {
-    if (monthlyCategorySales.length === 0) return;
+    if (categorySales.length === 0) return;
 
     const headers = [
       'Invoice No,Date,Client Name,Customer Phone,Items Count,Taxable Subtotal,CGST,SGST,Total GST,Grand Total,Paid Amount,Outstanding Balance,Payment Status\n',
     ];
 
-    const rows = monthlyCategorySales.map((sale) => {
+    const rows = categorySales.map((sale) => {
       const grandTotal = Number(sale.grandTotal ?? sale.total ?? 0);
       const cgst = Number(sale.cgst ?? 0);
       const sgst = Number(sale.sgst ?? 0);
@@ -291,7 +308,13 @@ export default function TodaySales({ sales = [] }) {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `monthly_revenue_audit_${selectedMonth}.csv`;
+    const periodKey =
+      periodView === 'today'
+        ? todayDateKey
+        : periodView === 'custom'
+          ? `${rangeStartDate}_to_${rangeEndDate}`
+          : selectedMonth;
+    link.download = `revenue_audit_${periodKey}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -300,7 +323,16 @@ export default function TodaySales({ sales = [] }) {
     month: 'long',
     year: 'numeric',
   });
-  const periodLabel = periodView === 'today' ? "Today's Sales" : monthLabel;
+  const customRangeIsValid =
+    Boolean(rangeStartDate && rangeEndDate) && rangeStartDate <= rangeEndDate;
+  const periodLabel =
+    periodView === 'today'
+      ? "Today's Sales"
+      : periodView === 'custom'
+        ? customRangeIsValid
+          ? `${formatDateKey(rangeStartDate)} to ${formatDateKey(rangeEndDate)}`
+          : 'Invalid date range'
+        : monthLabel;
 
   const formatCurrency = (value) =>
     `₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -319,60 +351,103 @@ export default function TodaySales({ sales = [] }) {
             </p>
           </div>
         </div>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <label className="flex items-center gap-2 text-xs font-semibold text-gray-600">
-            Accounting month
-            <select
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(e.target.value)}
-              className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-800 outline-none focus:border-indigo-500"
-            >
-              {availableMonths.map((month) => (
-                <option key={month} value={month}>
-                  {new Date(`${month}-01T00:00:00`).toLocaleDateString('en-IN', {
-                    month: 'long',
-                    year: 'numeric',
-                  })}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1">
-            <button
-              type="button"
-              onClick={() => {
-                setTodayDateKey(getLocalDateKey(new Date()));
-                setPeriodView('today');
-              }}
-              aria-pressed={periodView === 'today'}
-              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
-                periodView === 'today'
-                  ? 'bg-indigo-600 text-white'
-                  : 'text-gray-600 hover:bg-gray-100'
-              }`}
-            >
-              Today&apos;s Sales
-            </button>
-            <button
-              type="button"
-              onClick={() => setPeriodView('month')}
-              aria-pressed={periodView === 'month'}
-              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
-                periodView === 'month'
-                  ? 'bg-indigo-600 text-white'
-                  : 'text-gray-600 hover:bg-gray-100'
-              }`}
-            >
-              Full Month
-            </button>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            {periodView === 'month' && (
+              <label className="flex items-center gap-2 text-xs font-semibold text-gray-600">
+                Accounting month
+                <select
+                  value={selectedMonth}
+                  onChange={(e) => setSelectedMonth(e.target.value)}
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-800 outline-none focus:border-indigo-500"
+                >
+                  {availableMonths.map((month) => (
+                    <option key={month} value={month}>
+                      {new Date(`${month}-01T00:00:00`).toLocaleDateString('en-IN', {
+                        month: 'long',
+                        year: 'numeric',
+                      })}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <div className="inline-flex flex-wrap rounded-lg border border-gray-200 bg-white p-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setTodayDateKey(getLocalDateKey(new Date()));
+                  setPeriodView('today');
+                }}
+                aria-pressed={periodView === 'today'}
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+                  periodView === 'today'
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
+                Today&apos;s Sales
+              </button>
+              <button
+                type="button"
+                onClick={() => setPeriodView('month')}
+                aria-pressed={periodView === 'month'}
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+                  periodView === 'month'
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
+                Full Month
+              </button>
+              <button
+                type="button"
+                onClick={() => setPeriodView('custom')}
+                aria-pressed={periodView === 'custom'}
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+                  periodView === 'custom'
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
+                Custom Range
+              </button>
+            </div>
           </div>
+          {periodView === 'custom' && (
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="flex flex-col gap-1 text-xs font-semibold text-gray-600">
+                From date
+                <input
+                  type="date"
+                  value={rangeStartDate}
+                  onChange={(e) => setRangeStartDate(e.target.value)}
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none focus:border-indigo-500"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-xs font-semibold text-gray-600">
+                To date
+                <input
+                  type="date"
+                  value={rangeEndDate}
+                  onChange={(e) => setRangeEndDate(e.target.value)}
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none focus:border-indigo-500"
+                />
+              </label>
+              {!customRangeIsValid && (
+                <p className="pb-2 text-xs font-medium text-red-600" role="alert">
+                  Select a valid range with the start date on or before the end date.
+                </p>
+              )}
+            </div>
+          )}
         </div>
       </section>
 
       <section className="grid grid-cols-1 gap-4 rounded-2xl border border-gray-100 bg-white p-5 shadow-[0_2px_12px_rgba(0,0,0,0.04)] sm:grid-cols-2 lg:grid-cols-4 print:hidden">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">Control period</p>
-          <p className="mt-1 font-semibold text-gray-900">{monthLabel}</p>
+          <p className="mt-1 font-semibold text-gray-900">{periodLabel}</p>
           <p className="mt-1 text-xs text-gray-500">Source: completed invoices</p>
         </div>
         <div>
@@ -410,7 +485,7 @@ export default function TodaySales({ sales = [] }) {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2,
           })}`}
-          detail={`${filteredSales.length} invoices ${periodView === 'today' ? 'today' : `in ${monthLabel}`}`}
+          detail={`${filteredSales.length} invoices ${periodView === 'month' ? `in ${monthLabel}` : `for ${periodLabel.toLowerCase()}`}`}
           icon={TrendingUp}
           tone="blue"
         />
@@ -445,7 +520,7 @@ export default function TodaySales({ sales = [] }) {
       </div>
 
       {/* ROW 2: Category Performance Analysis */}
-      <section className="rounded-2xl border border-gray-100 bg-white p-6 shadow-[0_2px_12px_rgba(0,0,0,0.04)] print:hidden">
+      {/* <section className="rounded-2xl border border-gray-100 bg-white p-6 shadow-[0_2px_12px_rgba(0,0,0,0.04)] print:hidden">
         <div className="flex flex-col justify-between gap-4 border-b border-gray-100 pb-5 lg:flex-row lg:items-center">
           <div>
             <h3 className="flex items-center gap-2 font-semibold text-gray-900">
@@ -525,7 +600,7 @@ export default function TodaySales({ sales = [] }) {
             </div>
           </div>
         )}
-      </section>
+      </section> */}
 
       {/* ROW 3: Sales Ledger Table with CSV Export */}
       <section className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-[0_2px_12px_rgba(0,0,0,0.04)] print:hidden">
@@ -551,14 +626,14 @@ export default function TodaySales({ sales = [] }) {
             </label>
             <button
               onClick={exportLedgerToCSV}
-              disabled={monthlyCategorySales.length === 0}
+              disabled={categorySales.length === 0}
               className={`flex items-center justify-center gap-2 rounded-xl border px-4 py-2 text-xs font-semibold transition-colors ${
-                monthlyCategorySales.length === 0
+                categorySales.length === 0
                   ? 'border-gray-100 bg-gray-50 text-gray-300 cursor-not-allowed'
                   : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50 cursor-pointer'
               }`}
             >
-              <Download size={15} /> Export Monthly Audit CSV
+              <Download size={15} /> Export Audit CSV
             </button>
           </div>
         </div>

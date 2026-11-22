@@ -603,7 +603,7 @@ function buildInvoicePdfBuffer(bill, qrBuffer) {
       const doc = new PDFDocument({ size: 'A4', margin: 30 });
       const signaturePath = isPackaged
         ? path.join(process.resourcesPath, 'public', 'signature.png')
-        : path.join(__dirname, '../public/signature.png');
+        : path.join(__dirname, '../public/signature1.png');
       const buffers = [];
       doc.on('data', (chunk) => buffers.push(chunk));
       doc.on('end', () => resolve(Buffer.concat(buffers)));
@@ -632,7 +632,7 @@ function buildInvoicePdfBuffer(bill, qrBuffer) {
         doc.font('Helvetica-Bold').fontSize(14).text(bill.storeName, 30, 35);
       }
 
-      const documentTitle = bill.documentType === 'Sale' ? 'Sale Bill' : 'Estimate Bill';
+      const documentTitle = bill.documentType === 'Sale' ? 'Invoice' : 'Estimate invoice';
       doc.font('Helvetica-Bold').fontSize(14).text(documentTitle, 0, 35, { align: 'center' });
 
       doc
@@ -643,7 +643,7 @@ function buildInvoicePdfBuffer(bill, qrBuffer) {
         .font('Helvetica')
         .fontSize(8)
         .text(bill.storeAddress, 300, 48, { align: 'right', width: 265 });
-      doc.text(`Phone no.: ${bill.storePhone}`, 300, 70, { align: 'right', width: 265 });
+      doc.text(`Phone no: ${bill.storePhone}`, 300, 70, { align: 'right', width: 265 });
       doc.text(`GSTIN: ${bill.storeGstin}, State: 33-Tamil Nadu`, 300, 82, {
         align: 'right',
         width: 265,
@@ -672,7 +672,7 @@ function buildInvoicePdfBuffer(bill, qrBuffer) {
         .fontSize(8)
         .text(`${documentTitle} Details`, 302, boxY + 4);
       doc.rect(297, boxY, 268, 52).stroke();
-      doc.font('Helvetica').fontSize(9).text(`${documentTitle} No.: ${bill.invoiceNo}`, 302, boxY + 20);
+      doc.font('Helvetica').fontSize(9).text(`${documentTitle} No: ${bill.invoiceNo}`, 302, boxY + 20);
       doc.text(`Date: ${bill.date}`, 302, boxY + 34);
 
       // --- TABLE HEADER ---
@@ -721,11 +721,9 @@ function buildInvoicePdfBuffer(bill, qrBuffer) {
           sumAmountPlusGst += amountPlusGst;
         }
 
-        doc.font('Helvetica').text(String(idx + 1), cols[0].x + 4, trY + 5);
-        doc
-          .font('Helvetica-Bold')
-          .text(item.name, cols[1].x + 4, trY + 5, { width: cols[1].w - 8 });
-        doc.font('Helvetica').text(String(qty), cols[2].x + 4, trY + 5, {
+        doc.font('Helvetica-Bold').text(String(idx + 1), cols[0].x + 4, trY + 5);
+        doc.text(item.name, cols[1].x + 4, trY + 5, { width: cols[1].w - 8 });
+        doc.text(String(qty), cols[2].x + 4, trY + 5, {
           width: cols[2].w - 8,
           align: 'center',
         });
@@ -733,7 +731,7 @@ function buildInvoicePdfBuffer(bill, qrBuffer) {
           width: cols[3].w - 8,
           align: 'right',
         });
-        doc.font('Helvetica-Bold').text(item.displayOnly ? 'Included' : `Rs. ${amountPlusGst.toFixed(2)}`, cols[4].x + 4, trY + 5, {
+        doc.text(item.displayOnly ? 'Included' : `Rs. ${amountPlusGst.toFixed(2)}`, cols[4].x + 4, trY + 5, {
           width: cols[4].w - 8,
           align: 'right',
         });
@@ -777,36 +775,21 @@ function buildInvoicePdfBuffer(bill, qrBuffer) {
       const totalCgst = sumGstAmount / 2;
       const totalSgst = sumGstAmount / 2;
 
-      // Left column contains GST split-up only for sale bills.
-      doc.rect(30, bY, 270, 14).fillAndStroke('#6b7280', '#000');
-      doc
-        .fillColor('#fff')
-        .font('Helvetica-Bold')
-        .fontSize(8)
-        .text(isSale ? 'GST Details' : 'Estimate Amount In Words', 35, bY + 3);
-      doc.rect(30, bY, 270, isSale ? 105 : 36).stroke();
-      doc.fillColor('#000').font('Helvetica').fontSize(8.5);
       if (isSale) {
+        doc.rect(30, bY, 270, 14).fillAndStroke('#6b7280', '#000');
+        doc.fillColor('#fff').font('Helvetica-Bold').fontSize(8).text('GST Details', 35, bY + 3);
+        doc.rect(30, bY, 270, 105).stroke();
+        doc.fillColor('#000').font('Helvetica-Bold').fontSize(8.5);
         doc.text(`CGST (9%) = Rs. ${totalCgst.toFixed(2)}`, 35, bY + 20);
         doc.text(`SGST (9%) = Rs. ${totalSgst.toFixed(2)}`, 35, bY + 38);
         doc.font('Helvetica-Bold').text(`GST (18%) = Rs. ${sumGstAmount.toFixed(2)}`, 35, bY + 56);
-        doc
-          .font('Helvetica-Bold')
-          .fontSize(7.5)
-          .text('Amount in words:', 35, bY + 77);
-        doc
-          .font('Helvetica')
-          .fontSize(7.3)
-          .text(numToWords(sumAmountPlusGst), 35, bY + 88, { width: 245 });
-      } else {
-        doc.text(numToWords(sumAmountPlusGst), 35, bY + 18, { width: 260 });
       }
 
       // Right Column: Amounts Box
       // The right box contains amounts, without the GST split-up.
       doc.rect(300, bY, 265, 14).fillAndStroke('#6b7280', '#000');
       doc.fillColor('#fff').font('Helvetica-Bold').fontSize(8).text('Amounts', 305, bY + 3);
-      doc.rect(300, bY, 265, 68).stroke();
+      doc.rect(300, bY, 265, 105).stroke();
 
       doc.fillColor('#000').font('Helvetica').fontSize(8);
       doc.font('Helvetica-Bold').fontSize(8.5);
@@ -815,20 +798,20 @@ function buildInvoicePdfBuffer(bill, qrBuffer) {
         width: 100,
         align: 'right',
       });
-      doc.font('Helvetica').fontSize(8);
-      doc.text('Received =', 305, bY + 37);
-      doc.text(`Rs. ${Number(bill.paidAmount || 0).toFixed(2)}`, 460, bY + 37, {
-        width: 100,
-        align: 'right',
-      });
-      doc.text('Balance =', 305, bY + 52);
-      doc.text(`Rs. ${Number(bill.balanceAmount ?? sumAmountPlusGst).toFixed(2)}`, 460, bY + 52, {
-        width: 100,
-        align: 'right',
-      });
+      doc.rect(300, bY + 68, 265, 14).fillAndStroke('#6b7280', '#000');
+      doc
+        .fillColor('#fff')
+        .font('Helvetica-Bold')
+        .fontSize(8)
+        .text('Amount In Words', 305, bY + 71);
+      doc.rect(300, bY + 82, 265, 23).fillAndStroke('#f3f4f6', '#000');
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(7.3)
+        .fillColor('#000')
+        .text(numToWords(sumAmountPlusGst), 305, bY + 85, { width: 250 });
 
-      // Lower Bottom Row: Bank Details | Terms | Signature
-      const lowY = bY + 86;
+      const lowY = bY + 105;
 
       doc.rect(30, lowY, 195, 14).fillAndStroke('#6b7280', '#000');
       doc.fillColor('#fff').font('Helvetica-Bold').fontSize(8).text('Bank Details', 35, lowY + 3);
@@ -839,7 +822,7 @@ function buildInvoicePdfBuffer(bill, qrBuffer) {
         doc.fillColor('#000').font('Helvetica-Bold').fontSize(6).text('UPI SCAN TO PAY', 37, lowY + 82);
       }
 
-      doc.fillColor('#000').font('Helvetica').fontSize(7);
+      doc.fillColor('#000').font('Helvetica-Bold').fontSize(7);
       doc.text('Name : ICICI BANK LIMITED,', 100, lowY + 22);
       doc.text('TIRUNELVELI JUNCTION', 100, lowY + 31);
       doc.text('Account No. : 613505500805', 100, lowY + 42);
@@ -855,13 +838,13 @@ function buildInvoicePdfBuffer(bill, qrBuffer) {
       doc.rect(225, lowY, 170, 95).stroke();
       doc
         .fillColor('#000')
-        .font('Helvetica')
+        .font('Helvetica-Bold')
         .fontSize(6.5)
         .text(
           '1. Prices include applicable GST unless stated otherwise.\n2. Verify product details, quantity, spelling, photographs, and layout before approval/printing.\n3. Confirmed orders are non-refundable once production begins; any balance is payable before delivery.',
           230,
           lowY + 20,
-          { width: 155, lineGap: 3 }
+          { width: 155, lineGap: 2 }
         );
 
       const sigBoxX = 395;
@@ -876,11 +859,14 @@ function buildInvoicePdfBuffer(bill, qrBuffer) {
           align: 'center',
         });
       if (fs.existsSync(signaturePath)) {
-        doc.image(signaturePath, sigBoxX + 20, sigBoxY + 18, {
-          fit: [110, 42],
+        doc.save();
+        doc.rect(sigBoxX + 10, sigBoxY + 18, 150, 42).clip();
+        doc.image(signaturePath, sigBoxX + 10, sigBoxY + 18, {
+          cover: [150, 42],
           align: 'center',
           valign: 'center',
         });
+        doc.restore();
       }
       doc
         .font('Helvetica-Bold')
@@ -1706,7 +1692,7 @@ app.post('/api/complete-bill', async (req, res) => {
       storeGstin = '33ABEFP8960D1Z7',
       storeAddress = '10/1.11/1 Parasakthi building upstairs Madrai road, Tirunelveli junction Tirunelveli',
       storePhone = '8754540404',
-      upiId = 'photobooks@icici',
+      upiId = 'eazypay.ntb1100092027@icici',
     } = req.body;
 
     if (!items || items.length === 0) {
@@ -1769,7 +1755,7 @@ app.post('/api/complete-bill', async (req, res) => {
     if (cleanPhone.length === 10) cleanPhone = `91${cleanPhone}`;
 
     // 3. Generate UPI QR Code & PDF
-    const upiUri = `upi://pay?pa=${upiId}&pn=${encodeURIComponent(storeName)}&am=${calcGrandTotal.toFixed(2)}&cu=INR`;
+    const upiUri = `upi://pay?pa=${encodeURIComponent(String(upiId).trim())}&pn=${encodeURIComponent(storeName)}&am=${calcGrandTotal.toFixed(2)}&cu=INR`;
     const qrBuffer = await QRCode.toBuffer(upiUri, { width: 300, margin: 1 });
 
     const pdfBuffer = await buildInvoicePdfBuffer(
@@ -1785,8 +1771,6 @@ app.post('/api/complete-bill', async (req, res) => {
         cgst: calcCgst,
         sgst: calcSgst,
         total: calcGrandTotal,
-        paidAmount: 0,
-        balanceAmount: calcGrandTotal,
         storeName,
         storeGstin,
         storeAddress,
@@ -1799,7 +1783,6 @@ app.post('/api/complete-bill', async (req, res) => {
     // 4. Save PDF to Archive Folder
     const pdfFileName = `${invoiceNo}.pdf`;
     const fullPdfPath = path.join(archiveDir, pdfFileName);
-    // Invoice numbers contain a date/sequence slash, so create the date folder first.
     fs.mkdirSync(path.dirname(fullPdfPath), { recursive: true });
     fs.writeFileSync(fullPdfPath, pdfBuffer);
     const publicPdfUrl = `/archives/${pdfFileName}`;
@@ -1814,7 +1797,7 @@ app.post('/api/complete-bill', async (req, res) => {
       const executeCheckout = db.transaction(() => {
         db.prepare(
           `
-          INSERT INTO Sale (id, invoiceNo, customerName, customerPlace, customerPhone, subtotal, total, paidAmount, balanceAmount, cgst, sgst, itemsJson, pdfPath, documentType, synced)
+          INSERT INTO Sale (id, invoiceNo, customerName, customerPlace, customerPhone, subtotal, total, cgst, sgst, itemsJson, pdfPath, documentType, synced)
           VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 1)
         `
         ).run(
